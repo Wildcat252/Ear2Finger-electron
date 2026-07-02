@@ -36,3 +36,8 @@ React + TypeScript + Tailwind CSS frontend for the Ear2Finger application.
 - `src/App.tsx` - Main application component
 - `src/main.tsx` - React entry point
 - `src/index.css` - Global styles with Tailwind directives
+- `src/api.ts` - Axios API client for the backend
+- `src/components/` - React UI components (Dashboard, Workspace, Settings, etc.)
+- `src/contexts/` - React context providers (workspace state)
+- `src/lib/` - Shared helpers (e.g. GitHub update checks)
+- `src/utils/` - Utility functions
