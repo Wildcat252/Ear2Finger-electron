@@ -2054,7 +2054,7 @@ export default function Workspace() {
                     </svg>
                   </div>
                   <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg text-gray-900 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-10 min-w-[100px]">
-                    {[0.2, 0.4, 0.6, 0.8, 1, 1.2].map((sec) => (
+                    {[0.2, 0.4, 0.6, 0.8, 1, 1.2, 1.4].map((sec) => (
                       <button
                         key={sec}
                         onClick={() => setTtsWordInterval(sec)}
