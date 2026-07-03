@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useAuth } from '../contexts/AuthContext'
 import {
   getConfig,
   setConfig,
@@ -8,24 +7,17 @@ import {
   addAIKey,
   activateAIKey,
   deleteAIKey,
-  listUsers,
-  createUser,
-  updateUser,
-  deleteUser,
-  fetchMe,
-  type AdminUser,
   type SetConfigPayload,
   type AIKeyHint,
 } from '../api'
 import { checkGitHubForUpdate, GITHUB_RELEASES_URL } from '../utils/githubUpdate'
 
-type SettingsSection = 'ai-api-key' | 'about' | 'users'
+type SettingsSection = 'ai-api-key' | 'about'
 
 const APP_VERSION = `${__APP_SEMVER__} (${__APP_COMMIT__})`
 
 export default function Settings() {
   const navigate = useNavigate()
-  const { user, logout, setUser } = useAuth()
   const [activeSection, setActiveSection] = useState<SettingsSection>('ai-api-key')
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [apiKey, setApiKey] = useState('')
@@ -35,32 +27,8 @@ export default function Settings() {
   const [aiKeysLoading, setAiKeysLoading] = useState(false)
   const [aiKeysError, setAiKeysError] = useState<string | null>(null)
 
-  // User management (superuser only)
-  const [users, setUsers] = useState<AdminUser[]>([])
-  const [usersLoading, setUsersLoading] = useState(false)
-  const [usersError, setUsersError] = useState<string | null>(null)
-  const [userModalOpen, setUserModalOpen] = useState(false)
-  const [editingUser, setEditingUser] = useState<AdminUser | null>(null)
-  const [userForm, setUserForm] = useState({ username: '', email: '', password: '', is_superuser: false })
-  const [userFormSaving, setUserFormSaving] = useState(false)
-  const [userFormError, setUserFormError] = useState<string | null>(null)
-  const [deleteTarget, setDeleteTarget] = useState<AdminUser | null>(null)
-  const [deleteConfirming, setDeleteConfirming] = useState(false)
-
   const [updateCheckLoading, setUpdateCheckLoading] = useState(false)
   const [updateCheckMessage, setUpdateCheckMessage] = useState<string | null>(null)
-
-  const isSuperuser = user?.is_superuser === true
-
-  const fetchUsers = useCallback(() => {
-    if (!isSuperuser) return
-    setUsersLoading(true)
-    setUsersError(null)
-    listUsers()
-      .then(setUsers)
-      .catch((e) => setUsersError(e.response?.data?.detail ?? 'Failed to load users'))
-      .finally(() => setUsersLoading(false))
-  }, [isSuperuser])
 
   const loadAIKeys = useCallback(() => {
     setAiKeysLoading(true)
@@ -78,12 +46,8 @@ export default function Settings() {
       .then((c) => {
         setHasGeminiKey(Boolean(c.has_gemini_api_key))
       })
-      .catch(() => {})
+      .catch(() => { })
   }, [])
-
-  useEffect(() => {
-    if (activeSection === 'users' && isSuperuser) fetchUsers()
-  }, [activeSection, isSuperuser, fetchUsers])
 
   useEffect(() => {
     if (activeSection !== 'about') setUpdateCheckMessage(null)
@@ -104,77 +68,8 @@ export default function Settings() {
     return () => mq.removeEventListener('change', onChange)
   }, [])
 
-  const openAddUser = () => {
-    setEditingUser(null)
-    setUserForm({ username: '', email: '', password: '', is_superuser: false })
-    setUserFormError(null)
-    setUserModalOpen(true)
-  }
-
-  const openEditUser = (u: AdminUser) => {
-    setEditingUser(u)
-    setUserForm({ username: u.username, email: u.email ?? '', password: '', is_superuser: u.is_superuser })
-    setUserFormError(null)
-    setUserModalOpen(true)
-  }
-
-  const handleSaveUser = async () => {
-    setUserFormError(null)
-    setUserFormSaving(true)
-    try {
-      if (editingUser) {
-        await updateUser(editingUser.id, {
-          username: userForm.username.trim(),
-          email: userForm.email.trim() || undefined,
-          password: userForm.password || undefined,
-          is_superuser: userForm.is_superuser,
-        })
-      } else {
-        if (!userForm.password.trim()) {
-          setUserFormError('Password is required')
-          setUserFormSaving(false)
-          return
-        }
-        await createUser({
-          username: userForm.username.trim(),
-          email: userForm.email.trim() || undefined,
-          password: userForm.password,
-          is_superuser: userForm.is_superuser,
-        })
-      }
-      setUserModalOpen(false)
-      fetchUsers()
-      if (editingUser?.id === user?.id) {
-        fetchMe().then(setUser).catch(() => {})
-      }
-    } catch (e: unknown) {
-      const ax = e as { response?: { data?: { detail?: string | string[] } } }
-      const d = ax.response?.data?.detail
-      setUserFormError(Array.isArray(d) ? d.map((x: unknown) => (typeof x === 'object' && x && 'msg' in x ? (x as { msg?: string }).msg : String(x))).join(', ') : (d as string) ?? 'Failed to save')
-    } finally {
-      setUserFormSaving(false)
-    }
-  }
-
-  const handleDeleteUser = async () => {
-    if (!deleteTarget) return
-    setDeleteConfirming(true)
-    try {
-      await deleteUser(deleteTarget.id)
-      setDeleteTarget(null)
-      fetchUsers()
-      if (deleteTarget.id === user?.id) logout()
-    } catch (e: unknown) {
-      const ax = e as { response?: { data?: { detail?: string } } }
-      setUsersError(ax.response?.data?.detail ?? 'Failed to delete user')
-    } finally {
-      setDeleteConfirming(false)
-    }
-  }
-
   const settingsSections = [
     { id: 'ai-api-key' as SettingsSection, label: 'AI API-KEY' },
-    ...(isSuperuser ? [{ id: 'users' as SettingsSection, label: 'USERS' }] : []),
     { id: 'about' as SettingsSection, label: 'ABOUT' },
   ]
 
@@ -286,11 +181,11 @@ export default function Settings() {
             className="px-2 py-2 md:px-4 text-gray-600 hover:bg-gray-100 rounded-lg flex items-center gap-1.5 md:gap-2 text-sm md:text-base"
           >
             <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 32 32">
-              <polygon points="4 20 4 22 8.586 22 2 28.586 3.414 30 10 23.414 10 28 12 28 12 20 4 20"/>
-              <rect x="24.0001" y="21" width="2" height="5"/>
-              <rect x="20.0001" y="16" width="2" height="10"/>
-              <rect x="16" y="18" width="2" height="8"/>
-              <path d="M28,2H4A2.002,2.002,0,0,0,2,4V16H4V13H28.001l.001,15H16v2H28a2.0027,2.0027,0,0,0,2-2V4A2.0023,2.0023,0,0,0,28,2ZM12,11H4V4h8Zm2,0V4H28l.0007,7Z"/>
+              <polygon points="4 20 4 22 8.586 22 2 28.586 3.414 30 10 23.414 10 28 12 28 12 20 4 20" />
+              <rect x="24.0001" y="21" width="2" height="5" />
+              <rect x="20.0001" y="16" width="2" height="10" />
+              <rect x="16" y="18" width="2" height="8" />
+              <path d="M28,2H4A2.002,2.002,0,0,0,2,4V16H4V13H28.001l.001,15H16v2H28a2.0027,2.0027,0,0,0,2-2V4A2.0023,2.0023,0,0,0,28,2ZM12,11H4V4h8Zm2,0V4H28l.0007,7Z" />
             </svg>
             Dashboard
           </button>
@@ -303,35 +198,6 @@ export default function Settings() {
           </button>
         </nav>
 
-        <div className="flex items-center gap-2 md:gap-3 text-gray-700 order-2 md:order-3 shrink-0 ml-auto md:ml-0">
-          <div className="flex items-center gap-2 px-2 py-1 rounded-full bg-gray-50 border border-gray-200">
-            <div className="w-7 h-7 rounded-full bg-indigo-600 text-white flex items-center justify-center">
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M5.121 17.804A9 9 0 1118.88 17.804M15 11a3 3 0 11-6 0 3 3 0 016 0z"
-                />
-              </svg>
-            </div>
-            <span className="font-medium text-sm max-w-[8rem] md:max-w-none truncate">{user?.username ?? 'User'}</span>
-          </div>
-          <button
-            onClick={() => logout()}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded-full border border-gray-200"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6A2.25 2.25 0 005.25 5.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15M12 9l3-3m0 0l3 3m-3-3v12"
-              />
-            </svg>
-            Sign out
-          </button>
-        </div>
       </header>
 
       {!mobileNavOpen && (
@@ -354,9 +220,8 @@ export default function Settings() {
         {/* Left Sidebar */}
         <aside
           id="settings-nav-sidebar"
-          className={`w-full md:w-80 shrink-0 max-md:max-h-[min(50vh,380px)] md:max-h-none bg-gray-50 border-gray-200 border-b md:border-b-0 md:border-r flex flex-col min-h-0 ${
-            !mobileNavOpen ? 'max-md:hidden' : ''
-          }`}
+          className={`w-full md:w-80 shrink-0 max-md:max-h-[min(50vh,380px)] md:max-h-none bg-gray-50 border-gray-200 border-b md:border-b-0 md:border-r flex flex-col min-h-0 ${!mobileNavOpen ? 'max-md:hidden' : ''
+            }`}
         >
           <div className="md:hidden flex justify-end border-b border-gray-200 px-3 py-1.5 bg-gray-50">
             <button
@@ -376,11 +241,10 @@ export default function Settings() {
                   setActiveSection(section.id)
                   setMobileNavOpen(false)
                 }}
-                className={`w-full text-left px-4 py-3 rounded-lg transition-colors ${
-                  activeSection === section.id
+                className={`w-full text-left px-4 py-3 rounded-lg transition-colors ${activeSection === section.id
                     ? 'bg-gray-900 text-white'
                     : 'bg-white hover:bg-gray-100 text-gray-900'
-                }`}
+                  }`}
               >
                 <span className="font-medium">{section.label}</span>
               </button>
@@ -625,170 +489,8 @@ export default function Settings() {
               </section>
             </div>
           )}
-
-          {activeSection === 'users' && isSuperuser && (
-            <div className="w-full max-w-3xl">
-              <h1 className="text-2xl font-bold text-gray-900 mb-6">Users</h1>
-              {usersError && (
-                <div className="mb-4 text-sm text-red-600 bg-red-50 px-3 py-2 rounded-lg">{usersError}</div>
-              )}
-              <div className="mb-4">
-                <button
-                  type="button"
-                  onClick={openAddUser}
-                  className="px-4 py-2 bg-gray-900 text-white rounded-lg hover:bg-gray-800"
-                >
-                  Add user
-                </button>
-              </div>
-              {usersLoading ? (
-                <p className="text-gray-600">Loading users…</p>
-              ) : (
-                <div className="border border-gray-200 rounded-lg overflow-hidden">
-                  <table className="w-full text-left">
-                    <thead className="bg-gray-50 border-b border-gray-200">
-                      <tr>
-                        <th className="px-4 py-3 text-sm font-semibold text-gray-900">Username</th>
-                        <th className="px-4 py-3 text-sm font-semibold text-gray-900">Email</th>
-                        <th className="px-4 py-3 text-sm font-semibold text-gray-900">Superuser</th>
-                        <th className="px-4 py-3 text-sm font-semibold text-gray-900">Created</th>
-                        <th className="px-4 py-3 text-sm font-semibold text-gray-900 w-32">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-200">
-                      {users.map((u) => (
-                        <tr key={u.id} className="hover:bg-gray-50">
-                          <td className="px-4 py-3 text-gray-900">{u.username}</td>
-                          <td className="px-4 py-3 text-gray-600">{u.email ?? '—'}</td>
-                          <td className="px-4 py-3">{u.is_superuser ? 'Yes' : 'No'}</td>
-                          <td className="px-4 py-3 text-gray-600 text-sm">{u.created_at ? new Date(u.created_at).toLocaleDateString() : '—'}</td>
-                          <td className="px-4 py-3">
-                            <button
-                              type="button"
-                              onClick={() => openEditUser(u)}
-                              className="text-gray-700 hover:text-gray-900 mr-3"
-                            >
-                              Edit
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setDeleteTarget(u)}
-                              className="text-red-600 hover:text-red-800"
-                            >
-                              Delete
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          )}
         </main>
       </div>
-
-      {/* Add/Edit user modal */}
-      {userModalOpen && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-lg max-w-md w-full p-6">
-            <h2 className="text-lg font-bold text-gray-900 mb-4">{editingUser ? 'Edit user' : 'Add user'}</h2>
-            {userFormError && (
-              <div className="mb-4 text-sm text-red-600 bg-red-50 px-3 py-2 rounded-lg">{userFormError}</div>
-            )}
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Username</label>
-                <input
-                  type="text"
-                  value={userForm.username}
-                  onChange={(e) => setUserForm((f) => ({ ...f, username: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Email (optional)</label>
-                <input
-                  type="email"
-                  value={userForm.email}
-                  onChange={(e) => setUserForm((f) => ({ ...f, email: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Password {editingUser ? '(leave blank to keep)' : ''}
-                </label>
-                <input
-                  type="password"
-                  value={userForm.password}
-                  onChange={(e) => setUserForm((f) => ({ ...f, password: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                  placeholder={editingUser ? '••••••••' : ''}
-                />
-              </div>
-              <label className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={userForm.is_superuser}
-                  onChange={(e) => setUserForm((f) => ({ ...f, is_superuser: e.target.checked }))}
-                  className="rounded border-gray-300"
-                />
-                <span className="text-sm text-gray-700">Superuser</span>
-              </label>
-            </div>
-            <div className="mt-6 flex gap-3 justify-end">
-              <button
-                type="button"
-                onClick={() => setUserModalOpen(false)}
-                className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleSaveUser}
-                disabled={userFormSaving || !userForm.username.trim()}
-                className="px-4 py-2 bg-gray-900 text-white rounded-lg hover:bg-gray-800 disabled:opacity-50"
-              >
-                {userFormSaving ? 'Saving…' : editingUser ? 'Update' : 'Create'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Delete confirmation modal */}
-      {deleteTarget && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-lg max-w-sm w-full p-6">
-            <h2 className="text-lg font-bold text-gray-900 mb-2">Delete user</h2>
-            <p className="text-gray-600 mb-4">
-              Delete user <strong>{deleteTarget.username}</strong>? This cannot be undone.
-              {deleteTarget.id === user?.id && ' You will be signed out.'}
-            </p>
-            <div className="flex gap-3 justify-end">
-              <button
-                type="button"
-                onClick={() => setDeleteTarget(null)}
-                className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleDeleteUser}
-                disabled={deleteConfirming}
-                className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50"
-              >
-                {deleteConfirming ? 'Deleting…' : 'Delete'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }

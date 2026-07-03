@@ -16,7 +16,6 @@ import {
   type CoachFeedbackResponse,
   type PracticeRecommendationItem,
 } from '../api'
-import { useAuth } from '../contexts/AuthContext'
 import { useWorkspace, type Lesson } from '../contexts/WorkspaceContext'
 import ImportModal from './ImportModal'
 import LessonHistory from './LessonHistory'
@@ -29,7 +28,6 @@ interface Notification {
 
 export default function Workspace() {
   const navigate = useNavigate()
-  const { user, logout } = useAuth()
   const ws = useWorkspace()
   const {
     playlists,
@@ -94,7 +92,7 @@ export default function Workspace() {
       if (voices.length) {
         // Only keep English voices, sorted by name
         const english = voices
-          .filter(v => v.lang.startsWith('en'))
+          .filter(v => v.name.toLowerCase().includes('premium'))
           .sort((a, b) => a.name.localeCompare(b.name))
         setAvailableVoices(english)
       }
@@ -110,6 +108,17 @@ export default function Workspace() {
   // (e.g., effect cleanup on settings change). Without this, the error handler
   // sets isPlaying=false and the freshly-started speech gets killed.
   const ttsCancelledIntentionallyRef = useRef(false)
+  // Pending deferred speak() (see speakUtterance): after synth.cancel() we wait a
+  // tick before speaking so Chromium does not clip the start of the new utterance.
+  const ttsSpeakTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Set whenever we call synth.cancel() (including from the effect's own cleanup,
+  // e.g. on auto-advance to the next sentence). synth.speaking/pending can already
+  // report false by the time the next effect run checks them, so speakUtterance
+  // cannot rely on those alone to know a cancel just happened.
+  const ttsCancelPendingRef = useRef(false)
+  // Mirror of isCurrentSentenceFullyCorrect, read inside the TTS effect via a ref
+  // so it is NOT an effect dependency (typing must not restart/clip speech).
+  const isCurrentSentenceFullyCorrectRef = useRef(false)
   const resetTtsWordQueue = useCallback(() => {
     wordQueueIndexRef.current = 0
     if (wordQueueTimeoutRef.current) {
@@ -195,20 +204,20 @@ export default function Workspace() {
       .filter((id) => lessonProgress[id] === undefined)
     if (!missingIds.length) return
 
-    ;(async () => {
-      await Promise.all(
-        missingIds.map(async (videoId) => {
-          try {
-            const sessions = await getLessonSessions(videoId)
-            const latest = sessions[0] as LessonSessionRecord | undefined
-            const sentences = latest?.sentences_practiced ?? 0
-            setLessonProgress((prev) => (prev[videoId] === undefined ? { ...prev, [videoId]: sentences } : prev))
-          } catch {
-            // ignore per-video errors
-          }
-        })
-      )
-    })()
+      ; (async () => {
+        await Promise.all(
+          missingIds.map(async (videoId) => {
+            try {
+              const sessions = await getLessonSessions(videoId)
+              const latest = sessions[0] as LessonSessionRecord | undefined
+              const sentences = latest?.sentences_practiced ?? 0
+              setLessonProgress((prev) => (prev[videoId] === undefined ? { ...prev, [videoId]: sentences } : prev))
+            } catch {
+              // ignore per-video errors
+            }
+          })
+        )
+      })()
   }, [lessons, lessonProgress])
 
   // Load playlists and lessons on component mount
@@ -503,7 +512,7 @@ export default function Workspace() {
         correct_chars: videoSessionScores.correctChars,
         hint_count: videoSessionScores.hintCount,
         incorrect_chars: videoSessionScores.incorrectChars,
-      }).catch(() => {})
+      }).catch(() => { })
     }
     sessionStartedAtRef.current = getLocalDateTimeString()
 
@@ -621,8 +630,8 @@ export default function Workspace() {
 
       const nextSentence = sentences[currentSentenceIndex + 1]
       const endTime = nextSentence
-            ? nextSentence.start_time
-            : totalDuration
+        ? nextSentence.start_time
+        : totalDuration
 
       if (!endTime || endTime <= 0) return
 
@@ -651,14 +660,14 @@ export default function Workspace() {
             const onSeeked = () => {
               audioEl.removeEventListener('seeked', onSeeked)
               clearTimeout(fallback)
-              audioEl.play().catch(() => {})
+              audioEl.play().catch(() => { })
             }
             audioEl.addEventListener('seeked', onSeeked, { once: true })
             audioEl.currentTime = targetTime
             const fallback = setTimeout(() => {
               if (audioEl.paused) {
                 audioEl.removeEventListener('seeked', onSeeked)
-                audioEl.play().catch(() => {})
+                audioEl.play().catch(() => { })
               }
             }, 200)
           }
@@ -698,7 +707,7 @@ export default function Workspace() {
             programmaticSeekRef.current = true
             const onSeeked = () => {
               audioEl.removeEventListener('seeked', onSeeked)
-              audioEl.play().catch(() => {})
+              audioEl.play().catch(() => { })
             }
             audioEl.addEventListener('seeked', onSeeked, { once: true })
             audioEl.currentTime = currentSentence.start_time
@@ -716,7 +725,7 @@ export default function Workspace() {
               programmaticSeekRef.current = true
               const onSeeked = () => {
                 audioEl.removeEventListener('seeked', onSeeked)
-                audioEl.play().catch(() => {})
+                audioEl.play().catch(() => { })
               }
               audioEl.addEventListener('seeked', onSeeked, { once: true })
               audioEl.currentTime = ns.start_time
@@ -812,12 +821,12 @@ export default function Workspace() {
   }, [isPlaying, currentSentenceIndex, sentences, selectedLesson])
 
 
-  // Keyboard shortcuts: [ previous sentence, ] next sentence, Enter play/pause
+  // Keyboard shortcuts: [ previous sentence, ] next sentence, \ replay sentence, Enter play/pause
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement
       const inInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable
-      const isShortcutKey = e.key === '[' || e.key === ']' || e.key === 'Enter'
+      const isShortcutKey = e.key === '[' || e.key === ']' || e.key === '\\' || e.key === 'Enter'
       if (inInput && !isShortcutKey) return
 
       if (e.key === '[') {
@@ -857,9 +866,27 @@ export default function Workspace() {
           setCurrentTime(nextSentence.start_time)
         } else if (audioRef.current) {
           audioRef.current.currentTime = nextSentence.start_time
-          audioRef.current.play().catch(() => {})
+          audioRef.current.play().catch(() => { })
         }
         setIsPlaying(true)
+        return
+      }
+      if (e.key === '\\') {
+        e.preventDefault()
+        if (!selectedLesson || !sentences.length || !currentSentence) return
+        resetTtsWordQueue()
+        repeatCountRef.current = 0
+        if (selectedLesson.youtube_url?.startsWith('text://')) {
+          window.speechSynthesis.cancel()
+          setIsPlaying(false)
+          setTimeout(() => setIsPlaying(true), 10)
+        } else if (audioRef.current) {
+          audioRef.current.currentTime = currentSentence.start_time
+          setCurrentTime(currentSentence.start_time)
+          programmaticSeekRef.current = true
+          audioRef.current.play().catch(() => { })
+          setIsPlaying(true)
+        }
         return
       }
       if (e.key === 'Enter') {
@@ -920,6 +947,11 @@ export default function Workspace() {
     return relevant.every(({ w, i }) => norm(w) === norm(wordInputs[i] ?? ''))
   })()
 
+  // Keep the ref in sync so the TTS effect can read correctness without depending on it.
+  useEffect(() => {
+    isCurrentSentenceFullyCorrectRef.current = Boolean(isCurrentSentenceFullyCorrect)
+  }, [isCurrentSentenceFullyCorrect])
+
   const hasCompletedOneSentence =
     sentences.length > 0 &&
     (currentSentenceIndex >= 1 || Boolean(isCurrentSentenceFullyCorrect))
@@ -933,6 +965,11 @@ export default function Workspace() {
       // Mark cancellation as intentional so utterance.onerror doesn't set isPlaying=false
       ttsCancelledIntentionallyRef.current = true
       synth.cancel()
+      ttsCancelPendingRef.current = true
+      if (ttsSpeakTimeoutRef.current) {
+        clearTimeout(ttsSpeakTimeoutRef.current)
+        ttsSpeakTimeoutRef.current = null
+      }
       if (intervalTimeoutRef.current && !isWaitingForPauseIntervalRef.current) {
         clearTimeout(intervalTimeoutRef.current)
         intervalTimeoutRef.current = null
@@ -966,7 +1003,7 @@ export default function Workspace() {
       wordQueueIndexRef.current = 0
       const shouldRepeat =
         repeatCount === '∞'
-          ? !isCurrentSentenceFullyCorrect
+          ? !isCurrentSentenceFullyCorrectRef.current
           : (typeof repeatCount === 'number' && repeatCountRef.current <= repeatCount - 1)
 
       if (pauseInterval > 0) {
@@ -1010,8 +1047,44 @@ export default function Workspace() {
       }
     }
 
-    // Reset the intentional-cancel flag before speaking so that real errors are caught
-    ttsCancelledIntentionallyRef.current = false
+    // Speak an utterance without clipping its start. Two distinct browser quirks cause
+    // clipping and need two different fixes:
+    // 1) Chromium drops the very start of an utterance when speak() is called in the
+    //    same tick as cancel(), so we only cancel when something is actually playing
+    //    and, when we do, defer the speak by a tick.
+    // 2) The speech engine's synthesis pipeline has its own warm-up latency and clips
+    //    the start of whatever is first in the queue after being idle -- no amount of
+    //    delay before calling speak() avoids this. So we queue a silent "primer"
+    //    utterance immediately before the real one; the warm-up eats the primer
+    //    instead of the sentence, since the two play back-to-back with no idle gap.
+    const speakUtterance = (utterance: SpeechSynthesisUtterance) => {
+      if (ttsSpeakTimeoutRef.current) {
+        clearTimeout(ttsSpeakTimeoutRef.current)
+        ttsSpeakTimeoutRef.current = null
+      }
+      const primeAndSpeak = () => {
+        const primer = new SpeechSynthesisUtterance('.')
+        primer.volume = 0
+        primer.rate = utterance.rate
+        if (utterance.voice) primer.voice = utterance.voice
+        synth.speak(primer)
+        synth.speak(utterance)
+      }
+      if (synth.speaking || synth.pending || ttsCancelPendingRef.current) {
+        ttsCancelledIntentionallyRef.current = true
+        synth.cancel()
+        ttsCancelPendingRef.current = true
+        ttsSpeakTimeoutRef.current = setTimeout(() => {
+          ttsSpeakTimeoutRef.current = null
+          ttsCancelledIntentionallyRef.current = false
+          ttsCancelPendingRef.current = false
+          primeAndSpeak()
+        }, 10)
+      } else {
+        ttsCancelledIntentionallyRef.current = false
+        primeAndSpeak()
+      }
+    }
 
     if (ttsWordByWord) {
       // --- Word-by-word mode ---
@@ -1023,10 +1096,6 @@ export default function Workspace() {
           onSentenceFinished()
           return
         }
-        // Mark cancellation as intentional before synth.cancel() inside word queue
-        ttsCancelledIntentionallyRef.current = true
-        synth.cancel()
-        ttsCancelledIntentionallyRef.current = false
         const utterance = new SpeechSynthesisUtterance(words[idx])
         utterance.rate = playbackSpeed
         if (selectedVoice) utterance.voice = selectedVoice
@@ -1051,7 +1120,7 @@ export default function Workspace() {
           setIsPlaying(false)
         }
 
-        synth.speak(utterance)
+        speakUtterance(utterance)
       }
 
       if (!isWaitingForPauseIntervalRef.current) {
@@ -1061,10 +1130,6 @@ export default function Workspace() {
     } else {
       // --- Whole-sentence mode (original) ---
       const speak = () => {
-        // Mark cancellation as intentional before synth.cancel() inside speak()
-        ttsCancelledIntentionallyRef.current = true
-        synth.cancel()
-        ttsCancelledIntentionallyRef.current = false
         const utterance = new SpeechSynthesisUtterance(currentSentence.sentence_text)
         utterance.rate = playbackSpeed
         if (selectedVoice) utterance.voice = selectedVoice
@@ -1080,7 +1145,7 @@ export default function Workspace() {
           setIsPlaying(false)
         }
 
-        synth.speak(utterance)
+        speakUtterance(utterance)
       }
 
       if (!isWaitingForPauseIntervalRef.current) {
@@ -1092,6 +1157,11 @@ export default function Workspace() {
       // Mark as intentional so the cancelled utterance's onerror doesn't kill playback
       ttsCancelledIntentionallyRef.current = true
       synth.cancel()
+      ttsCancelPendingRef.current = true
+      if (ttsSpeakTimeoutRef.current) {
+        clearTimeout(ttsSpeakTimeoutRef.current)
+        ttsSpeakTimeoutRef.current = null
+      }
       if (wordQueueTimeoutRef.current) {
         clearTimeout(wordQueueTimeoutRef.current)
         wordQueueTimeoutRef.current = null
@@ -1104,7 +1174,6 @@ export default function Workspace() {
     selectedLesson,
     playbackSpeed,
     repeatCount,
-    isCurrentSentenceFullyCorrect,
     pauseInterval,
     ttsVoiceName,
     availableVoices,
@@ -1127,7 +1196,7 @@ export default function Workspace() {
     if (sessionSaveTimeoutRef.current) clearTimeout(sessionSaveTimeoutRef.current)
     sessionSaveTimeoutRef.current = setTimeout(() => {
       sessionSaveTimeoutRef.current = null
-      upsertCurrentLessonSession(payload).catch(() => {})
+      upsertCurrentLessonSession(payload).catch(() => { })
     }, 800)
     return () => {
       if (sessionSaveTimeoutRef.current) clearTimeout(sessionSaveTimeoutRef.current)
@@ -1224,7 +1293,7 @@ export default function Workspace() {
         const err = e as { response?: { data?: { detail?: string } } }
         setCoachError(
           err.response?.data?.detail ||
-            'AI coach is unavailable. Check your AI API key in Settings.'
+          'AI coach is unavailable. Check your AI API key in Settings.'
         )
       })
       .finally(() => setCoachLoading(false))
@@ -1242,7 +1311,7 @@ export default function Workspace() {
         const err = e as { response?: { data?: { detail?: string } } }
         setPracticeError(
           err.response?.data?.detail ||
-            'Practice recommendations are temporarily unavailable. Try again later.'
+          'Practice recommendations are temporarily unavailable. Try again later.'
         )
       })
       .finally(() => setPracticeLoading(false))
@@ -1264,7 +1333,7 @@ export default function Workspace() {
         const err = e as { response?: { data?: { detail?: string } } }
         setCoachError(
           err.response?.data?.detail ||
-            'AI coach is unavailable. Check your AI API key in Settings.'
+          'AI coach is unavailable. Check your AI API key in Settings.'
         )
       })
       .finally(() => setCoachLoading(false))
@@ -1336,7 +1405,7 @@ export default function Workspace() {
       // Browser SpeechSynthesis will pick it up on isPlaying = true
     } else if (audioRef.current) {
       audioRef.current.currentTime = targetSentence.start_time
-      audioRef.current.play().catch(() => {})
+      audioRef.current.play().catch(() => { })
     }
     setIsPlaying(true)
   }
@@ -1467,11 +1536,11 @@ export default function Workspace() {
             className="px-2 py-2 md:px-4 text-gray-600 hover:bg-gray-100 rounded-lg flex items-center gap-1.5 md:gap-2 text-sm md:text-base"
           >
             <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 32 32">
-              <polygon points="4 20 4 22 8.586 22 2 28.586 3.414 30 10 23.414 10 28 12 28 12 20 4 20"/>
-              <rect x="24.0001" y="21" width="2" height="5"/>
-              <rect x="20.0001" y="16" width="2" height="10"/>
-              <rect x="16" y="18" width="2" height="8"/>
-              <path d="M28,2H4A2.002,2.002,0,0,0,2,4V16H4V13H28.001l.001,15H16v2H28a2.0027,2.0027,0,0,0,2-2V4A2.0023,2.0023,0,0,0,28,2ZM12,11H4V4h8Zm2,0V4H28l.0007,7Z"/>
+              <polygon points="4 20 4 22 8.586 22 2 28.586 3.414 30 10 23.414 10 28 12 28 12 20 4 20" />
+              <rect x="24.0001" y="21" width="2" height="5" />
+              <rect x="20.0001" y="16" width="2" height="10" />
+              <rect x="16" y="18" width="2" height="8" />
+              <path d="M28,2H4A2.002,2.002,0,0,0,2,4V16H4V13H28.001l.001,15H16v2H28a2.0027,2.0027,0,0,0,2-2V4A2.0023,2.0023,0,0,0,28,2ZM12,11H4V4h8Zm2,0V4H28l.0007,7Z" />
             </svg>
             Dashboard
           </button>
@@ -1487,44 +1556,14 @@ export default function Workspace() {
           </button>
         </nav>
 
-        <div className="flex items-center gap-2 md:gap-3 text-gray-700 order-2 md:order-3 shrink-0 ml-auto md:ml-0">
-          <div className="flex items-center gap-2 px-2 py-1 rounded-full bg-gray-50 border border-gray-200">
-            <div className="w-7 h-7 rounded-full bg-indigo-600 text-white flex items-center justify-center">
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M5.121 17.804A9 9 0 1118.88 17.804M15 11a3 3 0 11-6 0 3 3 0 016 0z"
-                />
-              </svg>
-            </div>
-            <span className="font-medium text-sm max-w-[8rem] md:max-w-none truncate">{user?.username ?? 'User'}</span>
-          </div>
-          <button
-            onClick={() => logout()}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded-full border border-gray-200"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6A2.25 2.25 0 005.25 5.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15M12 9l3-3m0 0l3 3m-3-3v12"
-              />
-            </svg>
-            Sign out
-          </button>
-        </div>
       </header>
 
       <div className="flex-1 flex flex-col md:flex-row overflow-hidden min-h-0">
         {/* Left Sidebar */}
         <aside
           id="workspace-lessons-sidebar"
-          className={`w-full md:w-80 shrink-0 max-md:max-h-[min(55vh,440px)] md:max-h-none bg-gray-50 border-gray-200 border-b md:border-b-0 md:border-r flex flex-col min-h-0 ${
-            !mobileSidebarOpen ? 'max-md:hidden' : ''
-          }`}
+          className={`w-full md:w-80 shrink-0 max-md:max-h-[min(55vh,440px)] md:max-h-none bg-gray-50 border-gray-200 border-b md:border-b-0 md:border-r flex flex-col min-h-0 ${!mobileSidebarOpen ? 'max-md:hidden' : ''
+            }`}
         >
           <div className="md:hidden flex justify-end border-b border-gray-200 px-3 py-1.5 bg-gray-50">
             <button
@@ -1625,116 +1664,112 @@ export default function Workspace() {
               return (
                 <div
                   key={lesson.id}
-                  className={`relative p-4 rounded-lg cursor-pointer transition-colors group ${
-                    selectedLesson?.id === lesson.id
-                      ? 'bg-gray-900 text-white'
-                      : 'bg-white hover:bg-gray-100'
-                  }`}
+                  className={`relative p-4 rounded-lg cursor-pointer transition-colors group ${selectedLesson?.id === lesson.id
+                    ? 'bg-gray-900 text-white'
+                    : 'bg-white hover:bg-gray-100'
+                    }`}
                   onClick={() => handleLessonSelect(lesson)}
                 >
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    setLessonMenuOpen(lessonMenuOpen === lesson.id ? null : lesson.id)
-                  }}
-                  className={`absolute top-2 right-2 p-1 rounded opacity-70 hover:opacity-100 ${
-                    selectedLesson?.id === lesson.id ? 'text-gray-300 hover:bg-gray-700' : 'text-gray-500 hover:bg-gray-200'
-                  }`}
-                  aria-label="Lesson menu"
-                >
-                  <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                    <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z" />
-                  </svg>
-                </button>
-                {lessonMenuOpen === lesson.id && (
-                  <div
-                    className="absolute right-2 top-10 z-10 py-1 bg-white border border-gray-200 rounded-lg shadow-lg text-left min-w-[200px]"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => handleRemoveFromPlaylist(lesson)}
-                      className="block w-full px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 text-left"
-                    >
-                      Remove from this playlist
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleDeleteLesson(lesson)}
-                      className="block w-full px-3 py-2 text-sm text-red-600 hover:bg-red-50 text-left"
-                    >
-                      Delete lesson
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleOpenYoutubeForLesson(lesson)}
-                      className="block w-full px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 text-left"
-                    >
-                      Open original YouTube video
-                    </button>
-                    <div className="my-1 border-t border-gray-100" />
-                    <div className="px-3 py-1 text-[11px] font-medium text-gray-500">
-                      Move to playlist
-                    </div>
-                    {playlists.filter((p) => p.id !== selectedPlaylistId).length === 0 ? (
-                      <div className="px-3 py-1 text-xs text-gray-400">
-                        No other playlists
-                      </div>
-                    ) : (
-                      playlists
-                        .filter((p) => p.id !== selectedPlaylistId)
-                        .map((p) => (
-                          <button
-                            key={p.id}
-                            type="button"
-                            onClick={() => handleMoveLessonToPlaylist(lesson, p.id)}
-                            className="block w-full px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100 text-left"
-                          >
-                            {p.name}
-                          </button>
-                        ))
-                    )}
-                  </div>
-                )}
-                <div className="space-y-1 pr-6">
-                  <div className="flex items-start justify-between gap-2">
-                    <h3
-                      className={`text-sm font-medium leading-snug line-clamp-2 text-left ${
-                        selectedLesson?.id === lesson.id ? 'text-white' : 'text-gray-900'
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setLessonMenuOpen(lessonMenuOpen === lesson.id ? null : lesson.id)
+                    }}
+                    className={`absolute top-2 right-2 p-1 rounded opacity-70 hover:opacity-100 ${selectedLesson?.id === lesson.id ? 'text-gray-300 hover:bg-gray-700' : 'text-gray-500 hover:bg-gray-200'
                       }`}
-                    >
-                      {lesson.title}
-                    </h3>
-                    {lesson.is_favorite && (
-                      <svg className="w-5 h-5 text-yellow-400 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                        <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
-                      </svg>
-                    )}
-                  </div>
-                  <div
-                    className={`flex justify-between text-[11px] ${
-                      selectedLesson?.id === lesson.id ? 'text-gray-300' : 'text-gray-600'
-                    }`}
+                    aria-label="Lesson menu"
                   >
-                    <span className="truncate">Duration: {formatDuration(lesson.duration)}</span>
-                    <span className="ml-2 whitespace-nowrap">
-                      Sentences: {lesson.sentence_count}
-                    </span>
-                  </div>
-                  <div className="mt-1 h-1 w-full rounded-full bg-gray-200 overflow-hidden">
+                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                      <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z" />
+                    </svg>
+                  </button>
+                  {lessonMenuOpen === lesson.id && (
                     <div
-                      className={`h-full rounded-full ${
-                        progressFraction >= 1
+                      className="absolute right-2 top-10 z-10 py-1 bg-white border border-gray-200 rounded-lg shadow-lg text-left min-w-[200px]"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveFromPlaylist(lesson)}
+                        className="block w-full px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 text-left"
+                      >
+                        Remove from this playlist
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteLesson(lesson)}
+                        className="block w-full px-3 py-2 text-sm text-red-600 hover:bg-red-50 text-left"
+                      >
+                        Delete lesson
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleOpenYoutubeForLesson(lesson)}
+                        className="block w-full px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 text-left"
+                      >
+                        Open original YouTube video
+                      </button>
+                      <div className="my-1 border-t border-gray-100" />
+                      <div className="px-3 py-1 text-[11px] font-medium text-gray-500">
+                        Move to playlist
+                      </div>
+                      {playlists.filter((p) => p.id !== selectedPlaylistId).length === 0 ? (
+                        <div className="px-3 py-1 text-xs text-gray-400">
+                          No other playlists
+                        </div>
+                      ) : (
+                        playlists
+                          .filter((p) => p.id !== selectedPlaylistId)
+                          .map((p) => (
+                            <button
+                              key={p.id}
+                              type="button"
+                              onClick={() => handleMoveLessonToPlaylist(lesson, p.id)}
+                              className="block w-full px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100 text-left"
+                            >
+                              {p.name}
+                            </button>
+                          ))
+                      )}
+                    </div>
+                  )}
+                  <div className="space-y-1 pr-6">
+                    <div className="flex items-start justify-between gap-2">
+                      <h3
+                        className={`text-sm font-medium leading-snug line-clamp-2 text-left ${selectedLesson?.id === lesson.id ? 'text-white' : 'text-gray-900'
+                          }`}
+                      >
+                        {lesson.title}
+                      </h3>
+                      {lesson.is_favorite && (
+                        <svg className="w-5 h-5 text-yellow-400 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                          <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+                        </svg>
+                      )}
+                    </div>
+                    <div
+                      className={`flex justify-between text-[11px] ${selectedLesson?.id === lesson.id ? 'text-gray-300' : 'text-gray-600'
+                        }`}
+                    >
+                      <span className="truncate">Duration: {formatDuration(lesson.duration)}</span>
+                      <span className="ml-2 whitespace-nowrap">
+                        Sentences: {lesson.sentence_count}
+                      </span>
+                    </div>
+                    <div className="mt-1 h-1 w-full rounded-full bg-gray-200 overflow-hidden">
+                      <div
+                        className={`h-full rounded-full ${progressFraction >= 1
                           ? 'bg-emerald-500'
                           : 'bg-indigo-500'
-                      }`}
-                      style={{ width: `${progressPercent || 0}%` }}
-                    />
+                          }`}
+                        style={{ width: `${progressPercent || 0}%` }}
+                      />
+                    </div>
                   </div>
                 </div>
-              </div>
-            )})}
+              )
+            })}
           </div>
 
           <div className="p-4 border-t border-gray-200">
@@ -1846,6 +1881,33 @@ export default function Workspace() {
                 </button>
                 <button
                   onClick={() => {
+                    if (!selectedLesson || !sentences.length || !currentSentence) return
+                    // Reset word queue so TTS restarts from word 0
+                    resetTtsWordQueue()
+                    repeatCountRef.current = 0
+                    if (selectedLesson.youtube_url?.startsWith('text://')) {
+                      // Cancel current speech, then re-trigger by toggling isPlaying
+                      window.speechSynthesis.cancel()
+                      setIsPlaying(false)
+                      setTimeout(() => setIsPlaying(true), 10)
+                    } else if (audioRef.current) {
+                      audioRef.current.currentTime = currentSentence.start_time
+                      setCurrentTime(currentSentence.start_time)
+                      programmaticSeekRef.current = true
+                      audioRef.current.play().catch(() => { })
+                      setIsPlaying(true)
+                    }
+                  }}
+                  disabled={!selectedLesson || !sentences.length}
+                  className="p-2 hover:bg-gray-100 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Replay current sentence"
+                >
+                  <svg className="w-5 h-5 text-gray-600" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M15.312 11.424a5.5 5.5 0 01-9.201 2.466l-.312-.311V15a.75.75 0 01-1.5 0v-3.5a.75.75 0 01.75-.75H8.5a.75.75 0 010 1.5H7.058l.162.162a4 4 0 006.693-1.793.75.75 0 011.399.555zM4.688 8.576a5.5 5.5 0 019.201-2.466l.312.311V5a.75.75 0 011.5 0v3.5a.75.75 0 01-.75.75H11.5a.75.75 0 010-1.5h1.442l-.162-.162a4 4 0 00-6.693 1.793.75.75 0 11-1.399-.555z" clipRule="evenodd" />
+                  </svg>
+                </button>
+                <button
+                  onClick={() => {
                     if (currentSentenceIndex >= sentences.length - 1) return
                     const nextIndex = currentSentenceIndex + 1
                     const nextSentence = sentences[nextIndex]
@@ -1865,7 +1927,7 @@ export default function Workspace() {
                       setCurrentTime(nextSentence.start_time)
                     } else if (audioRef.current) {
                       audioRef.current.currentTime = nextSentence.start_time
-                      audioRef.current.play().catch(() => {})
+                      audioRef.current.play().catch(() => { })
                     }
                     setIsPlaying(true)
                   }}
@@ -1885,15 +1947,14 @@ export default function Workspace() {
                     <div
                       className="absolute inset-y-0 left-0 bg-indigo-600 rounded-full origin-left"
                       style={{
-                        width: `${
-                          selectedLesson?.youtube_url?.startsWith('text://')
-                            ? sentences.length > 0
-                              ? Math.min(100, ((currentSentenceIndex + 1) / sentences.length) * 100)
-                              : 0
-                            : totalDuration > 0
+                        width: `${selectedLesson?.youtube_url?.startsWith('text://')
+                          ? sentences.length > 0
+                            ? Math.min(100, ((currentSentenceIndex + 1) / sentences.length) * 100)
+                            : 0
+                          : totalDuration > 0
                             ? Math.min(100, (currentTime / totalDuration) * 100)
                             : 0
-                        }%`,
+                          }%`,
                         transition: 'width 0.2s linear'
                       }}
                     />
@@ -1928,13 +1989,12 @@ export default function Workspace() {
                   </svg>
                 </div>
                 <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg text-gray-900 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-10 min-w-[120px]">
-                  {[0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map((speed) => (
+                  {[0.2, 0.4, 0.6, 0.8, 1].map((speed) => (
                     <button
                       key={speed}
                       onClick={() => setPlaybackSpeed(speed)}
-                      className={`w-full text-left px-4 py-2 text-xs text-gray-900 hover:bg-gray-100 ${
-                        playbackSpeed === speed ? 'bg-gray-100 font-semibold' : ''
-                      }`}
+                      className={`w-full text-left px-4 py-2 text-xs text-gray-900 hover:bg-gray-100 ${playbackSpeed === speed ? 'bg-gray-100 font-semibold' : ''
+                        }`}
                     >
                       {speed}x
                     </button>
@@ -1952,9 +2012,8 @@ export default function Workspace() {
                   <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg text-gray-900 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-10 min-w-[220px] max-h-[300px] overflow-y-auto">
                     <button
                       onClick={() => setTtsVoiceName('')}
-                      className={`w-full text-left px-4 py-2 text-xs text-gray-900 hover:bg-gray-100 ${
-                        !ttsVoiceName ? 'bg-gray-100 font-semibold' : ''
-                      }`}
+                      className={`w-full text-left px-4 py-2 text-xs text-gray-900 hover:bg-gray-100 ${!ttsVoiceName ? 'bg-gray-100 font-semibold' : ''
+                        }`}
                     >
                       Default
                     </button>
@@ -1962,9 +2021,8 @@ export default function Workspace() {
                       <button
                         key={v.name}
                         onClick={() => setTtsVoiceName(v.name)}
-                        className={`w-full text-left px-4 py-2 text-xs text-gray-900 hover:bg-gray-100 ${
-                          ttsVoiceName === v.name ? 'bg-gray-100 font-semibold' : ''
-                        }`}
+                        className={`w-full text-left px-4 py-2 text-xs text-gray-900 hover:bg-gray-100 ${ttsVoiceName === v.name ? 'bg-gray-100 font-semibold' : ''
+                          }`}
                       >
                         {v.name} <span className="text-gray-400 ml-1">({v.lang})</span>
                       </button>
@@ -1974,11 +2032,10 @@ export default function Workspace() {
               )}
               {selectedLesson?.youtube_url?.startsWith('text://') && (
                 <div
-                  className={`px-3 py-1.5 rounded-lg flex items-center gap-2 text-xs cursor-pointer transition-colors ${
-                    ttsWordByWord
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-gray-900 text-white'
-                  }`}
+                  className={`px-3 py-1.5 rounded-lg flex items-center gap-2 text-xs cursor-pointer transition-colors ${ttsWordByWord
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-gray-900 text-white'
+                    }`}
                   onClick={() => {
                     // Reset word queue before toggling so the effect re-enters cleanly
                     resetTtsWordQueue()
@@ -1997,13 +2054,12 @@ export default function Workspace() {
                     </svg>
                   </div>
                   <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg text-gray-900 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-10 min-w-[100px]">
-                    {[0, 0.1, 0.2, 0.3, 0.4, 0.5].map((sec) => (
+                    {[0.2, 0.4, 0.6, 0.8, 1, 1.2].map((sec) => (
                       <button
                         key={sec}
                         onClick={() => setTtsWordInterval(sec)}
-                        className={`w-full text-left px-4 py-2 text-xs text-gray-900 hover:bg-gray-100 ${
-                          ttsWordInterval === sec ? 'bg-gray-100 font-semibold' : ''
-                        }`}
+                        className={`w-full text-left px-4 py-2 text-xs text-gray-900 hover:bg-gray-100 ${ttsWordInterval === sec ? 'bg-gray-100 font-semibold' : ''
+                          }`}
                       >
                         {sec}s
                       </button>
@@ -2023,9 +2079,8 @@ export default function Workspace() {
                     <button
                       key={String(count)}
                       onClick={() => setRepeatCount(count === '∞' ? '∞' : count)}
-                      className={`w-full text-left px-4 py-2 text-xs text-gray-900 hover:bg-gray-100 ${
-                        repeatCount === count ? 'bg-gray-100 font-semibold' : ''
-                      }`}
+                      className={`w-full text-left px-4 py-2 text-xs text-gray-900 hover:bg-gray-100 ${repeatCount === count ? 'bg-gray-100 font-semibold' : ''
+                        }`}
                     >
                       {count === '∞' ? '∞' : count}
                     </button>
@@ -2048,9 +2103,8 @@ export default function Workspace() {
                         e.preventDefault()
                         setPauseInterval(sec)
                       }}
-                      className={`w-full text-left px-4 py-2 text-xs text-gray-900 hover:bg-gray-100 ${
-                        pauseInterval === sec ? 'bg-gray-100 font-semibold' : ''
-                      }`}
+                      className={`w-full text-left px-4 py-2 text-xs text-gray-900 hover:bg-gray-100 ${pauseInterval === sec ? 'bg-gray-100 font-semibold' : ''
+                        }`}
                     >
                       {sec} sec
                     </button>
@@ -2067,17 +2121,15 @@ export default function Workspace() {
                 <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg text-gray-900 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-10 min-w-[100px]">
                   <button
                     onClick={() => setIgnorePunctuation(true)}
-                    className={`w-full text-left px-4 py-2 text-xs text-gray-900 hover:bg-gray-100 ${
-                      ignorePunctuation ? 'bg-gray-100 font-semibold' : ''
-                    }`}
+                    className={`w-full text-left px-4 py-2 text-xs text-gray-900 hover:bg-gray-100 ${ignorePunctuation ? 'bg-gray-100 font-semibold' : ''
+                      }`}
                   >
                     Yes
                   </button>
                   <button
                     onClick={() => setIgnorePunctuation(false)}
-                    className={`w-full text-left px-4 py-2 text-xs text-gray-900 hover:bg-gray-100 ${
-                      !ignorePunctuation ? 'bg-gray-100 font-semibold' : ''
-                    }`}
+                    className={`w-full text-left px-4 py-2 text-xs text-gray-900 hover:bg-gray-100 ${!ignorePunctuation ? 'bg-gray-100 font-semibold' : ''
+                      }`}
                   >
                     No
                   </button>
@@ -2093,17 +2145,15 @@ export default function Workspace() {
                 <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg text-gray-900 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-10 min-w-[100px]">
                   <button
                     onClick={() => setIgnoreCase(true)}
-                    className={`w-full text-left px-4 py-2 text-xs text-gray-900 hover:bg-gray-100 ${
-                      ignoreCase ? 'bg-gray-100 font-semibold' : ''
-                    }`}
+                    className={`w-full text-left px-4 py-2 text-xs text-gray-900 hover:bg-gray-100 ${ignoreCase ? 'bg-gray-100 font-semibold' : ''
+                      }`}
                   >
                     Yes
                   </button>
                   <button
                     onClick={() => setIgnoreCase(false)}
-                    className={`w-full text-left px-4 py-2 text-xs text-gray-900 hover:bg-gray-100 ${
-                      !ignoreCase ? 'bg-gray-100 font-semibold' : ''
-                    }`}
+                    className={`w-full text-left px-4 py-2 text-xs text-gray-900 hover:bg-gray-100 ${!ignoreCase ? 'bg-gray-100 font-semibold' : ''
+                      }`}
                   >
                     No
                   </button>
@@ -2144,11 +2194,10 @@ export default function Workspace() {
                 <div className="max-w-4xl mx-auto w-full min-w-0">
                   <div className="h-6 md:h-8 flex items-center mt-1 mb-0 md:mt-3 md:mb-1">
                     <p
-                      className={`inline-flex items-center gap-1 text-lg md:text-xl font-semibold transition-opacity ${
-                        isCurrentSentenceFullyCorrect
-                          ? 'text-green-600 opacity-100'
-                          : 'text-transparent opacity-0'
-                      }`}
+                      className={`inline-flex items-center gap-1 text-lg md:text-xl font-semibold transition-opacity ${isCurrentSentenceFullyCorrect
+                        ? 'text-green-600 opacity-100'
+                        : 'text-transparent opacity-0'
+                        }`}
                     >
                       <span className="text-lg md:text-xl">✔</span>
                       <span>Correct</span>
@@ -2319,13 +2368,12 @@ export default function Workspace() {
                                 })
                               }
                             }}
-                            className={`bg-transparent border-0 outline-none px-0.5 py-0 min-w-0 rounded-sm focus:shadow-[0_0_0_2px_rgba(251,191,36,0.5)] ${underlineClass} ${isHintShown ? 'text-gray-400' : 'text-gray-900'} ${
-                              lastInputFeedback?.wordIndex === idx && lastInputFeedback?.type === 'correct'
-                                ? 'input-feedback-correct'
-                                : lastInputFeedback?.wordIndex === idx && lastInputFeedback?.type === 'wrong'
-                                  ? 'input-feedback-wrong'
-                                  : ''
-                            }`}
+                            className={`bg-transparent border-0 outline-none px-0.5 py-0 min-w-0 rounded-sm focus:shadow-[0_0_0_2px_rgba(251,191,36,0.5)] ${underlineClass} ${isHintShown ? 'text-gray-400' : 'text-gray-900'} ${lastInputFeedback?.wordIndex === idx && lastInputFeedback?.type === 'correct'
+                              ? 'input-feedback-correct'
+                              : lastInputFeedback?.wordIndex === idx && lastInputFeedback?.type === 'wrong'
+                                ? 'input-feedback-wrong'
+                                : ''
+                              }`}
                             style={{
                               maxWidth: `${Math.max(2, word.length * 1.2)}ch`,
                               fontSize: 'clamp(1.05rem, 4.2vw, 2.25rem)',
@@ -2367,6 +2415,7 @@ export default function Workspace() {
         </div>
         <div className="flex items-center gap-2 md:gap-4 flex-wrap justify-start md:justify-end">
           <span><kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">Enter</kbd> play / pause</span>
+          <span><kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">\</kbd> replay sentence</span>
           <span><kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">[</kbd> previous sentence</span>
           <span><kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">]</kbd> next sentence</span>
           <span><kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">Space</kbd> next word input</span>
@@ -2396,13 +2445,12 @@ export default function Workspace() {
         {notifications.map((note) => (
           <div
             key={note.id}
-            className={`w-full md:min-w-[260px] md:w-auto rounded-lg shadow-lg border px-4 py-3 text-sm font-medium ${
-              note.type === 'success'
-                ? 'bg-green-50 text-green-800 border-green-200'
-                : note.type === 'error'
-                  ? 'bg-red-50 text-red-800 border-red-200'
-                  : 'bg-indigo-50 text-indigo-800 border-indigo-200'
-            }`}
+            className={`w-full md:min-w-[260px] md:w-auto rounded-lg shadow-lg border px-4 py-3 text-sm font-medium ${note.type === 'success'
+              ? 'bg-green-50 text-green-800 border-green-200'
+              : note.type === 'error'
+                ? 'bg-red-50 text-red-800 border-red-200'
+                : 'bg-indigo-50 text-indigo-800 border-indigo-200'
+              }`}
             role="status"
           >
             {note.message}

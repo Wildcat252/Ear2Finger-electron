@@ -240,3 +240,6 @@ frontend/*.local
 # OS
 .DS_Store
 Thumbs.db
+
+# Local Qdrant dev data
+.dev-qdrant/

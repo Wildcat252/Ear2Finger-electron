@@ -3,21 +3,21 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials, OAuth2PasswordBearer
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 
 from database import get_db, User
 
-# HTTP Bearer token (frontend sends Authorization: Bearer <token>)
+# Optional HTTP Bearer token support. Desktop use falls back to the default user.
 security = HTTPBearer(auto_error=False)
 
 SECRET_KEY = os.getenv("SECRET_KEY", "ear2finger-dev-secret-change-in-production")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
 
-# Use built-in pbkdf2_sha256 so registration works even when bcrypt has version issues
+# Use built-in pbkdf2_sha256 for the local default user.
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
 
@@ -48,12 +48,21 @@ async def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
     db: Session = Depends(get_db),
 ) -> User:
+    def get_default_user() -> User:
+        user = db.query(User).filter(User.username == "default").first()
+        if not user:
+            user = User(
+                username="default",
+                hashed_password=get_password_hash("default"),
+                is_superuser=True,
+            )
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+        return user
+
     if not credentials or not credentials.credentials:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Not authenticated",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        return get_default_user()
     token = credentials.credentials
     payload = decode_token(token)
     if not payload:

@@ -94,6 +94,25 @@ function waitHttp(url, timeoutMs = 120000) {
   })
 }
 
+function assertPortFree(host, port, label) {
+  return new Promise((resolve, reject) => {
+    const sock = net.createConnection({ host, port })
+    sock.on('connect', () => {
+      sock.destroy()
+      reject(
+        new Error(
+          `Port ${port} is already in use (needed for the ${label}). ` +
+            `Is Ear2Finger already running? Close it (or whatever is using port ${port}) and try again.`
+        )
+      )
+    })
+    sock.on('error', () => {
+      sock.destroy()
+      resolve()
+    })
+  })
+}
+
 function pythonForBackend() {
   const backend = path.join(ROOT, 'backend')
   if (process.platform === 'win32') {
@@ -133,6 +152,8 @@ async function main() {
     EAR2FINGER_DOWNLOAD_DIR: dlDir,
   }
 
+  await assertPortFree('127.0.0.1', 8000, 'backend (uvicorn)')
+
   const uvicorn = spawn(py, ['-m', 'uvicorn', 'main:app', '--host', '127.0.0.1', '--port', '8000'], {
     cwd: backendRoot,
     stdio: 'inherit',
@@ -141,6 +162,8 @@ async function main() {
   children.push(uvicorn)
 
   await waitHttp('http://127.0.0.1:8000/api/health', 120000)
+
+  await assertPortFree('127.0.0.1', 3000, 'frontend (Vite)')
 
   const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm'
   const vite = spawn(npmCmd, ['run', 'dev'], {

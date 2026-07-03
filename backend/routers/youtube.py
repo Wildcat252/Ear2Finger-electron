@@ -324,10 +324,12 @@ async def process_custom_text(
         if not raw_text:
             raise ValueError("Text content cannot be empty")
 
-        # Basic sentence splitting by punctuation followed by space
-        # Splits by period, exclamation mark, or question mark, keeping the punctuation
-        # Lookbehind ensures punctuation remains attached to the sentence
-        sentence_texts = re.split(r'(?<=[.!?])\s+', raw_text)
+        # Basic sentence splitting by punctuation followed by space.
+        # For TTS lessons we split on commas as well as sentence enders so each
+        # comma- or period-delimited clause becomes its own practice chunk.
+        # Splits by period, exclamation mark, question mark, or comma, keeping
+        # the punctuation. Lookbehind ensures punctuation remains attached.
+        sentence_texts = re.split(r'(?<=[.!?,])\s+', raw_text)
         sentence_texts = [s.strip() for s in sentence_texts if s.strip()]
 
         if not sentence_texts:
