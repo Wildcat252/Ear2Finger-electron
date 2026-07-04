@@ -5,6 +5,7 @@ import {
   upsertCurrentLessonSession,
   saveLessonSession,
   getCoachFeedback,
+  translateText,
   getCoachRecommendations,
   createPlaylist,
   updatePlaylist,
@@ -151,6 +152,11 @@ export default function Workspace() {
   const [coachLoading, setCoachLoading] = useState(false)
   const [coachError, setCoachError] = useState<string | null>(null)
   const [coachFeedback, setCoachFeedback] = useState<CoachFeedbackResponse | null>(null)
+  const [translationVisible, setTranslationVisible] = useState(false)
+  const [translationLoading, setTranslationLoading] = useState(false)
+  const [translationError, setTranslationError] = useState<string | null>(null)
+  const [translation, setTranslation] = useState<string | null>(null)
+  const translationCacheRef = useRef<Map<number, string>>(new Map())
   const [practiceLoading, setPracticeLoading] = useState(false)
   const [practiceError, setPracticeError] = useState<string | null>(null)
   const [practiceRecommendations, setPracticeRecommendations] = useState<
@@ -821,12 +827,43 @@ export default function Workspace() {
   }, [isPlaying, currentSentenceIndex, sentences, selectedLesson])
 
 
-  // Keyboard shortcuts: [ previous sentence, ] next sentence, \ replay sentence, Enter play/pause
+  const toggleTranslation = useCallback(() => {
+    const sentence = selectedLesson ? (sentences[currentSentenceIndex] || null) : null
+    if (!sentence) return
+    if (translationVisible) {
+      setTranslationVisible(false)
+      return
+    }
+    setTranslationVisible(true)
+    setTranslationError(null)
+    const cached = translationCacheRef.current.get(sentence.id)
+    if (cached) {
+      setTranslation(cached)
+      return
+    }
+    setTranslation(null)
+    setTranslationLoading(true)
+    translateText(sentence.sentence_text)
+      .then((data) => {
+        translationCacheRef.current.set(sentence.id, data.translation)
+        setTranslation(data.translation)
+      })
+      .catch((e) => {
+        const err = e as { response?: { data?: { detail?: string } } }
+        setTranslationError(
+          err.response?.data?.detail ||
+          'Translation is unavailable. Check your AI API key in Settings.'
+        )
+      })
+      .finally(() => setTranslationLoading(false))
+  }, [selectedLesson, sentences, currentSentenceIndex, translationVisible])
+
+  // Keyboard shortcuts: [ previous sentence, ] next sentence, \ replay sentence, Enter play/pause, ; toggle word-by-word, = translate
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement
       const inInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable
-      const isShortcutKey = e.key === '[' || e.key === ']' || e.key === '\\' || e.key === 'Enter'
+      const isShortcutKey = e.key === '[' || e.key === ']' || e.key === '\\' || e.key === 'Enter' || e.key === ';' || e.key === '='
       if (inInput && !isShortcutKey) return
 
       if (e.key === '[') {
@@ -889,6 +926,20 @@ export default function Workspace() {
         }
         return
       }
+      if (e.key === ';') {
+        // Word-by-word mode only exists for TTS (text://) lessons
+        if (!selectedLesson?.youtube_url?.startsWith('text://')) return
+        e.preventDefault()
+        // Reset word queue before toggling so the effect re-enters cleanly
+        resetTtsWordQueue()
+        setTtsWordByWord(!ttsWordByWord)
+        return
+      }
+      if (e.key === '=') {
+        e.preventDefault()
+        toggleTranslation()
+        return
+      }
       if (e.key === 'Enter') {
         e.preventDefault()
         if (!selectedLesson || !sentences.length) return
@@ -897,7 +948,7 @@ export default function Workspace() {
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [currentSentenceIndex, sentences, selectedLesson, resetTtsWordQueue])
+  }, [currentSentenceIndex, sentences, selectedLesson, resetTtsWordQueue, ttsWordByWord, setTtsWordByWord, toggleTranslation])
 
   const formatDuration = (seconds: number) => {
     const mins = Math.floor(seconds / 60)
@@ -926,6 +977,14 @@ export default function Workspace() {
   }
 
   const currentSentence = selectedLesson ? (sentences[currentSentenceIndex] || null) : null
+
+  // Translation is per-sentence: hide it when navigating to another sentence
+  useEffect(() => {
+    setTranslationVisible(false)
+    setTranslation(null)
+    setTranslationError(null)
+  }, [currentSentenceIndex, selectedLesson?.id])
+
   const totalDuration = selectedLesson?.duration || 0
   const sentenceCount = sentences.length
 
@@ -2310,6 +2369,18 @@ export default function Workspace() {
                                 wordInputRefs.current[idx - 1]?.focus()
                                 return
                               }
+                              if (e.key === ' ' && e.shiftKey) {
+                                e.preventDefault()
+                                // Move to the previous input-able word (skip punctuation-only tokens)
+                                let prevIndex = idx - 1
+                                while (prevIndex >= 0 && isPunctuationOnlyToken(words[prevIndex])) {
+                                  prevIndex--
+                                }
+                                if (prevIndex >= 0) {
+                                  wordInputRefs.current[prevIndex]?.focus()
+                                }
+                                return
+                              }
                               if (e.key === ' ') {
                                 e.preventDefault()
                                 // Move to the next input-able word (skip punctuation-only tokens)
@@ -2387,6 +2458,26 @@ export default function Workspace() {
                       )
                     })}
                   </div>
+                  <div className="mt-4">
+                    <button
+                      type="button"
+                      onClick={toggleTranslation}
+                      title="Translate this sentence to Vietnamese (=)"
+                      className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${translationVisible
+                        ? 'border-indigo-300 bg-indigo-50 text-indigo-800'
+                        : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50'
+                        }`}
+                    >
+                      Translate
+                    </button>
+                    {translationVisible && (
+                      <div className="mt-2 text-sm md:text-base text-gray-600 italic">
+                        {translationLoading && <span>Translating\u2026</span>}
+                        {translationError && <span className="text-red-600 not-italic">{translationError}</span>}
+                        {translation && !translationLoading && !translationError && <span>{translation}</span>}
+                      </div>
+                    )}
+                  </div>
                 </div>
               )
             })() : (
@@ -2414,13 +2505,20 @@ export default function Workspace() {
           )}
         </div>
         <div className="flex items-center gap-2 md:gap-4 flex-wrap justify-start md:justify-end">
-          <span><kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">Enter</kbd> play / pause</span>
-          <span><kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">\</kbd> replay sentence</span>
-          <span><kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">[</kbd> previous sentence</span>
-          <span><kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">]</kbd> next sentence</span>
-          <span><kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">Space</kbd> next word input</span>
+          <span><kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">Enter</kbd> play/pause</span>
+          <span><kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">\</kbd> replay</span>
+          <span><kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">[</kbd> previous</span>
+          <span><kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">]</kbd> next</span>
+          <span><kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">Shift+Space</kbd> previous word</span>
+          <span><kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">Space</kbd> next word</span>
           <span>
-            <kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">Tab</kbd> reveal / hide word hint
+            <kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">Tab</kbd> reveal hint
+          </span>
+          <span>
+            <kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">;</kbd> WbW
+          </span>
+          <span>
+            <kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">=</kbd> translate
           </span>
         </div>
       </footer>

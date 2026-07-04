@@ -192,6 +192,15 @@ export async function getCoachFeedback(
   return data
 }
 
+export interface TranslateResponse {
+  translation: string
+}
+
+export async function translateText(text: string): Promise<TranslateResponse> {
+  const { data } = await api.post<TranslateResponse>('/api/ai/translate', { text })
+  return data
+}
+
 export interface PracticeRecommendationItem {
   sentence_id: number
   video_id: number

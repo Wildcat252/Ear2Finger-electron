@@ -40,6 +40,18 @@ class CoachFeedbackResponse(BaseModel):
     suggestions: List[str]
 
 
+class TranslateRequest(BaseModel):
+    """Text to translate into Vietnamese."""
+
+    text: str
+
+
+class TranslateResponse(BaseModel):
+    """Vietnamese translation of the submitted text."""
+
+    translation: str
+
+
 class CoachRecommendPracticeRequest(BaseModel):
     """Request body for practice recommendations.
 
@@ -310,6 +322,65 @@ async def generate_coach_feedback(
         )
 
     return CoachFeedbackResponse(summary=summary, suggestions=suggestions)
+
+
+@router.post("/ai/translate", response_model=TranslateResponse)
+async def translate_text(
+    body: TranslateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> TranslateResponse:
+    """Translate a sentence into Vietnamese using the user's configured LLM."""
+    text = body.text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Text to translate is empty.")
+
+    try:
+        llm = make_llm_for_user(current_user.id, db)
+    except HTTPException:
+        raise
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.exception(
+            "ai_translate: failed to construct LLM for user_id=%s: %s",
+            current_user.id,
+            exc,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail="Failed to initialize AI provider for translation.",
+        ) from exc
+
+    prompt = (
+        "Translate the following English sentence into Vietnamese. "
+        "Reply with ONLY the Vietnamese translation, no explanations:\n\n"
+        f"{text}"
+    )
+
+    try:
+        result = await llm.ainvoke(prompt)
+    except Exception as exc:
+        logger.exception(
+            "ai_translate: error while calling LLM for user_id=%s: %s",
+            current_user.id,
+            exc,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail="AI provider failed while translating.",
+        ) from exc
+
+    raw = getattr(result, "content", None)
+    if raw is None:
+        raw = str(result)
+    translation = _stringify_llm_content(raw).strip()
+
+    if not translation:
+        raise HTTPException(
+            status_code=502,
+            detail="AI provider returned an empty translation.",
+        )
+
+    return TranslateResponse(translation=translation)
 
 
 @router.post(
