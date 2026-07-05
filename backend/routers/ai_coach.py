@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any, List, Optional, Tuple
+
+import httpx
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -38,6 +41,19 @@ class CoachFeedbackResponse(BaseModel):
 
     summary: str
     suggestions: List[str]
+
+
+class TranslateRequest(BaseModel):
+    """Text to translate and the target language code (e.g. 'vi', 'ja')."""
+
+    text: str
+    target_lang: str = "vi"
+
+
+class TranslateResponse(BaseModel):
+    """Translation of the submitted text."""
+
+    translation: str
 
 
 class CoachRecommendPracticeRequest(BaseModel):
@@ -310,6 +326,50 @@ async def generate_coach_feedback(
         )
 
     return CoachFeedbackResponse(summary=summary, suggestions=suggestions)
+
+
+@router.post("/ai/translate", response_model=TranslateResponse)
+async def translate_text(body: TranslateRequest) -> TranslateResponse:
+    """Translate text via Google Translate's free web endpoint (no API key)."""
+    text = body.text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Text to translate is empty.")
+
+    target_lang = body.target_lang.strip()
+    if not re.fullmatch(r"[a-zA-Z-]{2,8}", target_lang):
+        raise HTTPException(status_code=400, detail="Invalid target language code.")
+
+    params = {
+        "client": "gtx",
+        "sl": "auto",
+        "tl": target_lang,
+        "dt": "t",
+        "q": text,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                "https://translate.googleapis.com/translate_a/single", params=params
+            )
+            resp.raise_for_status()
+        data = resp.json()
+        translation = "".join(
+            seg[0] for seg in (data[0] or []) if seg and seg[0]
+        ).strip()
+    except Exception as exc:
+        logger.exception("ai_translate: translation request failed: %s", exc)
+        raise HTTPException(
+            status_code=502,
+            detail="Translation service is unavailable. Check your internet connection.",
+        ) from exc
+
+    if not translation:
+        raise HTTPException(
+            status_code=502,
+            detail="Translation service returned an empty result.",
+        )
+
+    return TranslateResponse(translation=translation)
 
 
 @router.post(

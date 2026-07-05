@@ -89,3 +89,5 @@ jobs:
           path: release/
           if-no-files-found: error
           retention-days: 14
+
+# touched to register workflow with GitHub Actions

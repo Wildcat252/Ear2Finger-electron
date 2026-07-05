@@ -11,8 +11,17 @@ import {
   type AIKeyHint,
 } from '../api'
 import { checkGitHubForUpdate, GITHUB_RELEASES_URL } from '../utils/githubUpdate'
+import {
+  KEYBIND_ACTIONS,
+  KEYBIND_DEFAULTS,
+  KEYBIND_LABELS,
+  loadKeybindings,
+  saveKeybindings,
+  displayKey,
+  type KeybindAction,
+} from '../keybindings'
 
-type SettingsSection = 'ai-api-key' | 'about'
+type SettingsSection = 'ai-api-key' | 'keybindings' | 'about'
 
 const APP_VERSION = `${__APP_SEMVER__} (${__APP_COMMIT__})`
 
@@ -29,6 +38,10 @@ export default function Settings() {
 
   const [updateCheckLoading, setUpdateCheckLoading] = useState(false)
   const [updateCheckMessage, setUpdateCheckMessage] = useState<string | null>(null)
+
+  const [keybinds, setKeybinds] = useState(loadKeybindings)
+  const [capturingAction, setCapturingAction] = useState<KeybindAction | null>(null)
+  const [keybindError, setKeybindError] = useState<string | null>(null)
 
   const loadAIKeys = useCallback(() => {
     setAiKeysLoading(true)
@@ -53,6 +66,44 @@ export default function Settings() {
     if (activeSection !== 'about') setUpdateCheckMessage(null)
   }, [activeSection])
 
+  // Press-to-set capture for keybindings: while a row is armed, the next
+  // keydown is taken as the new binding (Escape cancels).
+  useEffect(() => {
+    if (!capturingAction) return
+    const onKeyDown = (e: KeyboardEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+      if (e.key === 'Escape') {
+        setCapturingAction(null)
+        return
+      }
+      // Bare modifiers: only Command (Meta) is supported as a tap-style binding
+      if (e.key === 'Shift' || e.key === 'Control' || e.key === 'Alt') {
+        setKeybindError('Modifier keys other than ⌘ cannot be bound on their own.')
+        return
+      }
+      // Letters, digits and space are typed into the word inputs during practice
+      if (/^[a-zA-Z0-9 ]$/.test(e.key)) {
+        setKeybindError('Letters, digits and Space are reserved for typing practice — pick a symbol key.')
+        return
+      }
+      const takenBy = KEYBIND_ACTIONS.find(
+        (a) => a !== capturingAction && keybinds[a] === e.key
+      )
+      if (takenBy) {
+        setKeybindError(`"${displayKey(e.key)}" is already used by ${KEYBIND_LABELS[takenBy]}.`)
+        return
+      }
+      const next = { ...keybinds, [capturingAction]: e.key }
+      setKeybinds(next)
+      saveKeybindings(next)
+      setKeybindError(null)
+      setCapturingAction(null)
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+  }, [capturingAction, keybinds])
+
   useEffect(() => {
     if (activeSection === 'ai-api-key') {
       loadAIKeys()
@@ -70,6 +121,7 @@ export default function Settings() {
 
   const settingsSections = [
     { id: 'ai-api-key' as SettingsSection, label: 'AI API-KEY' },
+    { id: 'keybindings' as SettingsSection, label: 'KEYBOARD SHORTCUTS' },
     { id: 'about' as SettingsSection, label: 'ABOUT' },
   ]
 
@@ -352,6 +404,64 @@ export default function Settings() {
                   )}
                 </div>
 
+              </div>
+            </div>
+          )}
+
+          {activeSection === 'keybindings' && (
+            <div className="w-full max-w-3xl">
+              <h1 className="text-2xl font-bold text-gray-900 mb-2">KEYBOARD SHORTCUTS</h1>
+              <p className="text-sm text-gray-600 mb-6">
+                Click a shortcut, then press the desired key. Press <kbd className="px-1 py-0.5 bg-gray-100 border border-gray-300 rounded font-mono text-xs">Esc</kbd> to cancel.
+                Letters, digits and Space can't be bound — they're used for typing practice.
+              </p>
+
+              <div className="space-y-6">
+                {keybindError && (
+                  <div className="text-sm text-red-600 bg-red-50 px-3 py-2 rounded-lg">{keybindError}</div>
+                )}
+
+                <ul className="space-y-2">
+                  {KEYBIND_ACTIONS.map((action) => (
+                    <li
+                      key={action}
+                      className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2"
+                    >
+                      <span className="text-sm text-gray-900">{KEYBIND_LABELS[action]}</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setKeybindError(null)
+                          setCapturingAction(capturingAction === action ? null : action)
+                        }}
+                        className={`min-w-[7rem] px-3 py-1.5 text-sm font-mono rounded-lg border transition-colors ${capturingAction === action
+                          ? 'border-indigo-400 bg-indigo-50 text-indigo-800 animate-pulse'
+                          : 'border-gray-300 bg-white text-gray-900 hover:bg-gray-50'
+                          }`}
+                      >
+                        {capturingAction === action ? 'Press a key…' : displayKey(keybinds[action])}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+
+                <div className="pt-4 border-t border-gray-200 flex items-center justify-between">
+                  <p className="text-xs text-gray-500">
+                    Changes apply the next time you open the Workspace.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setKeybinds({ ...KEYBIND_DEFAULTS })
+                      saveKeybindings({ ...KEYBIND_DEFAULTS })
+                      setCapturingAction(null)
+                      setKeybindError(null)
+                    }}
+                    className="px-3 py-1.5 text-sm font-medium text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50"
+                  >
+                    Reset to defaults
+                  </button>
+                </div>
               </div>
             </div>
           )}
