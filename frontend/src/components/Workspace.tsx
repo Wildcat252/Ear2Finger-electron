@@ -18,6 +18,7 @@ import {
   type PracticeRecommendationItem,
 } from '../api'
 import { useWorkspace, type Lesson } from '../contexts/WorkspaceContext'
+import { loadKeybindings, displayKey } from '../keybindings'
 import ImportModal from './ImportModal'
 import LessonHistory from './LessonHistory'
 
@@ -26,6 +27,21 @@ interface Notification {
   type: 'success' | 'error' | 'info'
   message: string
 }
+
+const SPEED_OPTIONS = [0.2, 0.4, 0.6, 0.8, 1, 1.2]
+
+const TRANSLATE_LANGUAGES = [
+  { code: 'vi', label: 'Tiếng Việt' },
+  { code: 'zh-CN', label: '中文' },
+  { code: 'ja', label: '日本語' },
+  { code: 'ko', label: '한국어' },
+  { code: 'es', label: 'Español' },
+  { code: 'fr', label: 'Français' },
+  { code: 'de', label: 'Deutsch' },
+  { code: 'ru', label: 'Русский' },
+  { code: 'th', label: 'ไทย' },
+  { code: 'id', label: 'Bahasa Indonesia' },
+]
 
 export default function Workspace() {
   const navigate = useNavigate()
@@ -156,7 +172,12 @@ export default function Workspace() {
   const [translationLoading, setTranslationLoading] = useState(false)
   const [translationError, setTranslationError] = useState<string | null>(null)
   const [translation, setTranslation] = useState<string | null>(null)
-  const translationCacheRef = useRef<Map<number, string>>(new Map())
+  const [translateLang, setTranslateLang] = useState<string>(
+    () => localStorage.getItem('ear2finger-translate-lang') ?? 'vi'
+  )
+  // Read once per mount; Workspace remounts when returning from Settings
+  const [keybinds] = useState(loadKeybindings)
+  const translationCacheRef = useRef<Map<string, string>>(new Map())
   const [practiceLoading, setPracticeLoading] = useState(false)
   const [practiceError, setPracticeError] = useState<string | null>(null)
   const [practiceRecommendations, setPracticeRecommendations] = useState<
@@ -827,46 +848,80 @@ export default function Workspace() {
   }, [isPlaying, currentSentenceIndex, sentences, selectedLesson])
 
 
-  const toggleTranslation = useCallback(() => {
+  const fetchTranslation = useCallback((lang: string) => {
     const sentence = selectedLesson ? (sentences[currentSentenceIndex] || null) : null
     if (!sentence) return
-    if (translationVisible) {
-      setTranslationVisible(false)
-      return
-    }
     setTranslationVisible(true)
     setTranslationError(null)
-    const cached = translationCacheRef.current.get(sentence.id)
+    const cacheKey = `${sentence.id}:${lang}`
+    const cached = translationCacheRef.current.get(cacheKey)
     if (cached) {
       setTranslation(cached)
       return
     }
     setTranslation(null)
     setTranslationLoading(true)
-    translateText(sentence.sentence_text)
+    translateText(sentence.sentence_text, lang)
       .then((data) => {
-        translationCacheRef.current.set(sentence.id, data.translation)
+        translationCacheRef.current.set(cacheKey, data.translation)
         setTranslation(data.translation)
       })
       .catch((e) => {
         const err = e as { response?: { data?: { detail?: string } } }
         setTranslationError(
           err.response?.data?.detail ||
-          'Translation is unavailable. Check your AI API key in Settings.'
+          'Translation is unavailable. Check your internet connection.'
         )
       })
       .finally(() => setTranslationLoading(false))
-  }, [selectedLesson, sentences, currentSentenceIndex, translationVisible])
+  }, [selectedLesson, sentences, currentSentenceIndex])
 
-  // Keyboard shortcuts: [ previous sentence, ] next sentence, \ replay sentence, Enter play/pause, ; toggle word-by-word, = translate
+  const toggleTranslation = useCallback(() => {
+    if (translationVisible) {
+      setTranslationVisible(false)
+      return
+    }
+    fetchTranslation(translateLang)
+  }, [translationVisible, translateLang, fetchTranslation])
+
+  const changeTranslateLang = useCallback((lang: string) => {
+    setTranslateLang(lang)
+    localStorage.setItem('ear2finger-translate-lang', lang)
+    if (translationVisible) fetchTranslation(lang)
+  }, [translationVisible, fetchTranslation])
+
+  // Keyboard shortcuts (rebindable in Settings → Keyboard shortcuts).
+  // Defaults: [ previous sentence, ] next sentence, \ replay sentence,
+  // Enter play/pause, Command (tap) toggle word-by-word, ` translate,
+  // - / = decrease / increase playback speed
   useEffect(() => {
+    // Tracks whether the Command key was used as part of a combo (e.g. Cmd+C),
+    // so that only a plain Command tap toggles word-by-word.
+    let metaCombo = false
+
+    const toggleWordByWord = () => {
+      // Word-by-word mode only exists for TTS (text://) lessons
+      if (!selectedLesson?.youtube_url?.startsWith('text://')) return
+      resetTtsWordQueue()
+      setTtsWordByWord(!ttsWordByWord)
+    }
+
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Any key pressed while Command is held makes this a combo, not a tap.
+      // Checked before the input guard so combos inside inputs are caught too.
+      if (e.metaKey && e.key !== 'Meta') metaCombo = true
+
       const target = e.target as HTMLElement
       const inInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable
-      const isShortcutKey = e.key === '[' || e.key === ']' || e.key === '\\' || e.key === 'Enter' || e.key === ';' || e.key === '='
+      const isShortcutKey = Object.values(keybinds).includes(e.key)
       if (inInput && !isShortcutKey) return
 
-      if (e.key === '[') {
+      if (e.key === keybinds.wordByWord && keybinds.wordByWord !== 'Meta') {
+        e.preventDefault()
+        toggleWordByWord()
+        return
+      }
+      if (e.key === keybinds.prevSentence) {
         e.preventDefault()
         if (currentSentenceIndex > 0 && sentences.length) {
           userInitiatedSentenceChangeRef.current = true
@@ -883,7 +938,7 @@ export default function Workspace() {
         }
         return
       }
-      if (e.key === ']') {
+      if (e.key === keybinds.nextSentence) {
         e.preventDefault()
         if (currentSentenceIndex >= sentences.length - 1) return
         const nextIndex = currentSentenceIndex + 1
@@ -908,7 +963,7 @@ export default function Workspace() {
         setIsPlaying(true)
         return
       }
-      if (e.key === '\\') {
+      if (e.key === keybinds.replay) {
         e.preventDefault()
         if (!selectedLesson || !sentences.length || !currentSentence) return
         resetTtsWordQueue()
@@ -926,29 +981,47 @@ export default function Workspace() {
         }
         return
       }
-      if (e.key === ';') {
-        // Word-by-word mode only exists for TTS (text://) lessons
-        if (!selectedLesson?.youtube_url?.startsWith('text://')) return
-        e.preventDefault()
-        // Reset word queue before toggling so the effect re-enters cleanly
-        resetTtsWordQueue()
-        setTtsWordByWord(!ttsWordByWord)
-        return
-      }
-      if (e.key === '=') {
+      if (e.key === keybinds.translate) {
         e.preventDefault()
         toggleTranslation()
         return
       }
-      if (e.key === 'Enter') {
+      if (e.key === keybinds.speedDown || e.key === keybinds.speedUp) {
+        e.preventDefault()
+        const idx = SPEED_OPTIONS.indexOf(playbackSpeed)
+        // Fall back to the nearest known step if the current speed isn't in the list.
+        const current = idx === -1
+          ? SPEED_OPTIONS.reduce((best, s, i) => Math.abs(s - playbackSpeed) < Math.abs(SPEED_OPTIONS[best] - playbackSpeed) ? i : best, 0)
+          : idx
+        const nextIdx = e.key === keybinds.speedUp ? current + 1 : current - 1
+        if (nextIdx >= 0 && nextIdx < SPEED_OPTIONS.length) {
+          setPlaybackSpeed(SPEED_OPTIONS[nextIdx])
+        }
+        return
+      }
+      if (e.key === keybinds.playPause) {
         e.preventDefault()
         if (!selectedLesson || !sentences.length) return
         setIsPlaying((prev) => !prev)
       }
     }
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      // Command-tap detection only applies when word-by-word is bound to Meta
+      if (keybinds.wordByWord !== 'Meta' || e.key !== 'Meta') return
+      const wasCombo = metaCombo
+      metaCombo = false
+      if (wasCombo) return
+      toggleWordByWord()
+    }
+
     window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [currentSentenceIndex, sentences, selectedLesson, resetTtsWordQueue, ttsWordByWord, setTtsWordByWord, toggleTranslation])
+    window.addEventListener('keyup', handleKeyUp)
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('keyup', handleKeyUp)
+    }
+  }, [currentSentenceIndex, sentences, selectedLesson, resetTtsWordQueue, ttsWordByWord, setTtsWordByWord, toggleTranslation, playbackSpeed, setPlaybackSpeed, keybinds])
 
   const formatDuration = (seconds: number) => {
     const mins = Math.floor(seconds / 60)
@@ -2048,7 +2121,7 @@ export default function Workspace() {
                   </svg>
                 </div>
                 <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg text-gray-900 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-10 min-w-[120px]">
-                  {[0.2, 0.4, 0.6, 0.8, 1].map((speed) => (
+                  {SPEED_OPTIONS.map((speed) => (
                     <button
                       key={speed}
                       onClick={() => setPlaybackSpeed(speed)}
@@ -2113,7 +2186,7 @@ export default function Workspace() {
                     </svg>
                   </div>
                   <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg text-gray-900 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-10 min-w-[100px]">
-                    {[0.2, 0.4, 0.6, 0.8, 1, 1.2, 1.4].map((sec) => (
+                    {[0, 0.2, 0.4, 0.6, 0.8, 1].map((sec) => (
                       <button
                         key={sec}
                         onClick={() => setTtsWordInterval(sec)}
@@ -2462,7 +2535,7 @@ export default function Workspace() {
                     <button
                       type="button"
                       onClick={toggleTranslation}
-                      title="Translate this sentence to Vietnamese (=)"
+                      title={`Translate this sentence (${displayKey(keybinds.translate)})`}
                       className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${translationVisible
                         ? 'border-indigo-300 bg-indigo-50 text-indigo-800'
                         : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50'
@@ -2470,6 +2543,16 @@ export default function Workspace() {
                     >
                       Translate
                     </button>
+                    <select
+                      value={translateLang}
+                      onChange={(e) => changeTranslateLang(e.target.value)}
+                      title="Translation language"
+                      className="ml-2 rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-xs text-gray-700"
+                    >
+                      {TRANSLATE_LANGUAGES.map((l) => (
+                        <option key={l.code} value={l.code}>{l.label}</option>
+                      ))}
+                    </select>
                     {translationVisible && (
                       <div className="mt-2 text-sm md:text-base text-gray-600 italic">
                         {translationLoading && <span>Translating\u2026</span>}
@@ -2505,20 +2588,23 @@ export default function Workspace() {
           )}
         </div>
         <div className="flex items-center gap-2 md:gap-4 flex-wrap justify-start md:justify-end">
-          <span><kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">Enter</kbd> play/pause</span>
-          <span><kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">\</kbd> replay</span>
-          <span><kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">[</kbd> previous</span>
-          <span><kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">]</kbd> next</span>
+          <span><kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">{displayKey(keybinds.playPause)}</kbd> play/pause</span>
+          <span><kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">{displayKey(keybinds.replay)}</kbd> replay</span>
+          <span><kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">{displayKey(keybinds.prevSentence)}</kbd> previous</span>
+          <span><kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">{displayKey(keybinds.nextSentence)}</kbd> next</span>
           <span><kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">Shift+Space</kbd> previous word</span>
           <span><kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">Space</kbd> next word</span>
           <span>
             <kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">Tab</kbd> reveal hint
           </span>
           <span>
-            <kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">;</kbd> WbW
+            <kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">{displayKey(keybinds.speedDown)}</kbd> / <kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">{displayKey(keybinds.speedUp)}</kbd> speed
           </span>
           <span>
-            <kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">=</kbd> translate
+            <kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">{displayKey(keybinds.wordByWord)}</kbd> WbW
+          </span>
+          <span>
+            <kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">{displayKey(keybinds.translate)}</kbd> translate
           </span>
         </div>
       </footer>

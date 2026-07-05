@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any, List, Optional, Tuple
+
+import httpx
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -41,13 +44,14 @@ class CoachFeedbackResponse(BaseModel):
 
 
 class TranslateRequest(BaseModel):
-    """Text to translate into Vietnamese."""
+    """Text to translate and the target language code (e.g. 'vi', 'ja')."""
 
     text: str
+    target_lang: str = "vi"
 
 
 class TranslateResponse(BaseModel):
-    """Vietnamese translation of the submitted text."""
+    """Translation of the submitted text."""
 
     translation: str
 
@@ -325,59 +329,44 @@ async def generate_coach_feedback(
 
 
 @router.post("/ai/translate", response_model=TranslateResponse)
-async def translate_text(
-    body: TranslateRequest,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-) -> TranslateResponse:
-    """Translate a sentence into Vietnamese using the user's configured LLM."""
+async def translate_text(body: TranslateRequest) -> TranslateResponse:
+    """Translate text via Google Translate's free web endpoint (no API key)."""
     text = body.text.strip()
     if not text:
         raise HTTPException(status_code=400, detail="Text to translate is empty.")
 
-    try:
-        llm = make_llm_for_user(current_user.id, db)
-    except HTTPException:
-        raise
-    except Exception as exc:  # pragma: no cover - defensive logging
-        logger.exception(
-            "ai_translate: failed to construct LLM for user_id=%s: %s",
-            current_user.id,
-            exc,
-        )
-        raise HTTPException(
-            status_code=502,
-            detail="Failed to initialize AI provider for translation.",
-        ) from exc
+    target_lang = body.target_lang.strip()
+    if not re.fullmatch(r"[a-zA-Z-]{2,8}", target_lang):
+        raise HTTPException(status_code=400, detail="Invalid target language code.")
 
-    prompt = (
-        "Translate the following English sentence into Vietnamese. "
-        "Reply with ONLY the Vietnamese translation, no explanations:\n\n"
-        f"{text}"
-    )
-
+    params = {
+        "client": "gtx",
+        "sl": "auto",
+        "tl": target_lang,
+        "dt": "t",
+        "q": text,
+    }
     try:
-        result = await llm.ainvoke(prompt)
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                "https://translate.googleapis.com/translate_a/single", params=params
+            )
+            resp.raise_for_status()
+        data = resp.json()
+        translation = "".join(
+            seg[0] for seg in (data[0] or []) if seg and seg[0]
+        ).strip()
     except Exception as exc:
-        logger.exception(
-            "ai_translate: error while calling LLM for user_id=%s: %s",
-            current_user.id,
-            exc,
-        )
+        logger.exception("ai_translate: translation request failed: %s", exc)
         raise HTTPException(
             status_code=502,
-            detail="AI provider failed while translating.",
+            detail="Translation service is unavailable. Check your internet connection.",
         ) from exc
-
-    raw = getattr(result, "content", None)
-    if raw is None:
-        raw = str(result)
-    translation = _stringify_llm_content(raw).strip()
 
     if not translation:
         raise HTTPException(
             status_code=502,
-            detail="AI provider returned an empty translation.",
+            detail="Translation service returned an empty result.",
         )
 
     return TranslateResponse(translation=translation)

@@ -196,8 +196,11 @@ export interface TranslateResponse {
   translation: string
 }
 
-export async function translateText(text: string): Promise<TranslateResponse> {
-  const { data } = await api.post<TranslateResponse>('/api/ai/translate', { text })
+export async function translateText(text: string, targetLang: string): Promise<TranslateResponse> {
+  const { data } = await api.post<TranslateResponse>('/api/ai/translate', {
+    text,
+    target_lang: targetLang,
+  })
   return data
 }
 
