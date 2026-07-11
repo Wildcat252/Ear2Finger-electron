@@ -30,6 +30,17 @@ interface Notification {
 
 const SPEED_OPTIONS = [0.2, 0.4, 0.6, 0.8, 1, 1.2]
 
+// Scales the word-by-word TTS gap exponentially by word length so longer words
+// give more time to type: 1x (2^0) at ≤6 letters (the baseline Word Gap
+// setting), 4x (2^2) at 10, 8x (2^3) at 15, doubling every 5 letters after
+// that, with the exponent interpolated smoothly between anchors.
+function wordGapMultiplier(word: string): number {
+  const length = word.replace(/[^\w]/g, '').length
+  if (length <= 6) return 1
+  if (length <= 10) return 2 ** ((length - 6) / 2)
+  return 2 ** (2 + (length - 10) / 5)
+}
+
 const TRANSLATE_LANGUAGES = [
   { code: 'vi', label: 'Tiếng Việt' },
   { code: 'zh-CN', label: '中文' },
@@ -1235,11 +1246,12 @@ export default function Workspace() {
         utterance.onend = () => {
           wordQueueIndexRef.current = idx + 1
           if (idx + 1 < words.length) {
-            // Wait for the word interval before speaking the next word
+            // Wait for the word interval before speaking the next word, scaled up
+            // for longer words so there's enough time to type them
             wordQueueTimeoutRef.current = setTimeout(() => {
               wordQueueTimeoutRef.current = null
               speakWord(idx + 1)
-            }, ttsWordInterval * 1000)
+            }, ttsWordInterval * 1000 * wordGapMultiplier(words[idx]))
           } else {
             onSentenceFinished()
           }
