@@ -31,14 +31,25 @@ interface Notification {
 const SPEED_OPTIONS = [0.2, 0.4, 0.6, 0.8, 1, 1.2]
 
 // Scales the word-by-word TTS gap exponentially by word length so longer words
-// give more time to type: 1x (2^0) at ≤6 letters (the baseline Word Gap
-// setting), 4x (2^2) at 10, 8x (2^3) at 15, doubling every 5 letters after
-// that, with the exponent interpolated smoothly between anchors.
+// give more time to type: 0.5x under 3 letters (quick words need less time),
+// 1x (2^0) at 3-6 letters (the baseline Word Gap setting), 4x (2^2) at 10,
+// 8x (2^3) at 15, doubling every 5 letters after that, with the exponent
+// interpolated smoothly between anchors.
 function wordGapMultiplier(word: string): number {
   const length = word.replace(/[^\w]/g, '').length
+  if (length <= 3) return 0.5
   if (length <= 6) return 1
   if (length <= 10) return 2 ** ((length - 6) / 2)
   return 2 ** (2 + (length - 10) / 5)
+}
+
+// Common punctuation spoken by name in word-by-word mode so the learner
+// knows to type it: "hello," is read as "hello" (word gap) "comma".
+const SPOKEN_PUNCTUATION: Record<string, string> = {
+  ',': 'comma',
+  '.': 'period',
+  '?': 'question mark',
+  '!': 'exclamation mark',
 }
 
 const TRANSLATE_LANGUAGES = [
@@ -1049,13 +1060,16 @@ export default function Workspace() {
   const normalizeWord = (w: string) => {
     let s = w
     if (ignoreCase) s = s.toLowerCase()
-    if (ignorePunctuation) s = s.replace(/[^\w\s]/g, '')
+    if (ignorePunctuation) s = s.replace(/[^\w\s,.?!]/g, '')
     return s
   }
 
   const isPunctuationOnlyToken = (token: string) => {
     const trimmed = token.trim()
     if (!trimmed) return false
+    // Common punctuation (, . ? !) must be typed, so a lone "," or "?!" is a
+    // real input token, not decoration.
+    if (/^[,.?!]+$/.test(trimmed)) return false
     // If there is at least one alphanumeric character, we treat it as a real word.
     return !/[0-9A-Za-z]/.test(trimmed)
   }
@@ -1078,7 +1092,7 @@ export default function Workspace() {
     const norm = (w: string) => {
       let s = w
       if (ignoreCase) s = s.toLowerCase()
-      if (ignorePunctuation) s = s.replace(/[^\w\s]/g, '')
+      if (ignorePunctuation) s = s.replace(/[^\w\s,.?!]/g, '')
       return s
     }
     const relevant = words
@@ -1234,24 +1248,54 @@ export default function Workspace() {
       const words = currentSentence.sentence_text.split(/\s+/).filter(Boolean)
       if (words.length === 0) { onSentenceFinished(); return }
 
-      const speakWord = (idx: number) => {
-        if (idx >= words.length) {
+      // Expand each token into speech segments so the Word Gap also separates a
+      // word from its spoken punctuation: "Hello," -> "Hello" (gap) "comma" (gap).
+      // Punctuation-name segments use half the base gap (typing them is one
+      // keystroke); word segments keep the length-scaled gap.
+      type TtsSegment = { text: string; gapMultiplier: number; tokenIdx: number; lastOfToken: boolean }
+      const segments: TtsSegment[] = []
+      words.forEach((token, tokenIdx) => {
+        const wordPart = token.replace(/[,.?!]/g, '').trim()
+        const punctNames = (token.match(/[,.?!]/g) ?? []).map((ch) => SPOKEN_PUNCTUATION[ch])
+        if (wordPart) {
+          segments.push({
+            text: wordPart,
+            gapMultiplier: wordGapMultiplier(wordPart),
+            tokenIdx,
+            lastOfToken: punctNames.length === 0,
+          })
+        }
+        punctNames.forEach((name, i) => {
+          segments.push({
+            text: name,
+            gapMultiplier: 0.5,
+            tokenIdx,
+            lastOfToken: i === punctNames.length - 1,
+          })
+        })
+      })
+      if (segments.length === 0) { onSentenceFinished(); return }
+
+      const speakSegment = (segIdx: number) => {
+        if (segIdx >= segments.length) {
           onSentenceFinished()
           return
         }
-        const utterance = new SpeechSynthesisUtterance(words[idx])
+        const segment = segments[segIdx]
+        const utterance = new SpeechSynthesisUtterance(segment.text)
         utterance.rate = playbackSpeed
         if (selectedVoice) utterance.voice = selectedVoice
 
         utterance.onend = () => {
-          wordQueueIndexRef.current = idx + 1
-          if (idx + 1 < words.length) {
-            // Wait for the word interval before speaking the next word, scaled up
-            // for longer words so there's enough time to type them
+          // Resume position is tracked at token granularity
+          if (segment.lastOfToken) wordQueueIndexRef.current = segment.tokenIdx + 1
+          if (segIdx + 1 < segments.length) {
+            // Wait for the word interval before the next segment, scaled up for
+            // longer words so there's enough time to type them
             wordQueueTimeoutRef.current = setTimeout(() => {
               wordQueueTimeoutRef.current = null
-              speakWord(idx + 1)
-            }, ttsWordInterval * 1000 * wordGapMultiplier(words[idx]))
+              speakSegment(segIdx + 1)
+            }, ttsWordInterval * 1000 * segment.gapMultiplier)
           } else {
             onSentenceFinished()
           }
@@ -1268,8 +1312,14 @@ export default function Workspace() {
       }
 
       if (!isWaitingForPauseIntervalRef.current) {
-        // When settings change mid-playback, restart from word 0 of the current sentence
-        speakWord(wordQueueIndexRef.current)
+        // Resume from the first segment of the saved token (0 after a reset)
+        const startToken = wordQueueIndexRef.current
+        const startSeg = segments.findIndex((s) => s.tokenIdx >= startToken)
+        if (startSeg === -1) {
+          onSentenceFinished()
+        } else {
+          speakSegment(startSeg)
+        }
       }
     } else {
       // --- Whole-sentence mode (original) ---
@@ -1564,7 +1614,7 @@ export default function Workspace() {
     const normalize = (w: string) => {
       let s = w
       if (ignoreCase) s = s.toLowerCase()
-      if (ignorePunctuation) s = s.replace(/[^\w\s]/g, '')
+      if (ignorePunctuation) s = s.replace(/[^\w\s,.?!]/g, '')
       return s
     }
 
