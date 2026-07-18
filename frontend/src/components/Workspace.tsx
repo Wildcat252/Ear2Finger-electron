@@ -143,6 +143,9 @@ export default function Workspace() {
 
   const wordQueueIndexRef = useRef(0)
   const wordQueueTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Set by the word-by-word TTS effect; skips the rest of the current word
+  // (speech + gap + punctuation) and jumps to the next word immediately.
+  const ttsSkipWordRef = useRef<(() => void) | null>(null)
   // Flag to suppress utterance.onerror when synth.cancel() is called intentionally
   // (e.g., effect cleanup on settings change). Without this, the error handler
   // sets isPlaying=false and the freshly-started speech gets killed.
@@ -1008,6 +1011,11 @@ export default function Workspace() {
         toggleTranslation()
         return
       }
+      if (e.key === keybinds.skipWord) {
+        e.preventDefault()
+        ttsSkipWordRef.current?.()
+        return
+      }
       if (e.key === keybinds.speedDown || e.key === keybinds.speedUp) {
         e.preventDefault()
         const idx = SPEED_OPTIONS.indexOf(playbackSpeed)
@@ -1276,6 +1284,11 @@ export default function Workspace() {
       })
       if (segments.length === 0) { onSentenceFinished(); return }
 
+      // Utterances abandoned by Skip: their late onend must not schedule anything
+      const abandonedUtterances = new WeakSet<SpeechSynthesisUtterance>()
+      let currentSegIdx = -1
+      let currentUtterance: SpeechSynthesisUtterance | null = null
+
       const speakSegment = (segIdx: number) => {
         if (segIdx >= segments.length) {
           onSentenceFinished()
@@ -1285,8 +1298,11 @@ export default function Workspace() {
         const utterance = new SpeechSynthesisUtterance(segment.text)
         utterance.rate = playbackSpeed
         if (selectedVoice) utterance.voice = selectedVoice
+        currentSegIdx = segIdx
+        currentUtterance = utterance
 
         utterance.onend = () => {
+          if (abandonedUtterances.has(utterance)) return
           // Resume position is tracked at token granularity
           if (segment.lastOfToken) wordQueueIndexRef.current = segment.tokenIdx + 1
           if (segIdx + 1 < segments.length) {
@@ -1303,12 +1319,36 @@ export default function Workspace() {
 
         utterance.onerror = (e) => {
           // Ignore 'interrupted' and 'canceled' errors from intentional synth.cancel()
+          if (abandonedUtterances.has(utterance)) return
           if (ttsCancelledIntentionallyRef.current) return
           if (e instanceof SpeechSynthesisErrorEvent && (e.error === 'interrupted' || e.error === 'canceled')) return
           setIsPlaying(false)
         }
 
         speakUtterance(utterance)
+      }
+
+      // Skip the rest of the current word — cut off its speech, drop the
+      // remaining gap and any pending punctuation names — and jump straight
+      // to the next word. The skipped word's input is left as-is.
+      ttsSkipWordRef.current = () => {
+        if (currentSegIdx < 0) return
+        const tokenIdx = segments[currentSegIdx].tokenIdx
+        if (currentUtterance) abandonedUtterances.add(currentUtterance)
+        if (wordQueueTimeoutRef.current) {
+          clearTimeout(wordQueueTimeoutRef.current)
+          wordQueueTimeoutRef.current = null
+        }
+        wordQueueIndexRef.current = tokenIdx + 1
+        let next = currentSegIdx + 1
+        while (next < segments.length && segments[next].tokenIdx === tokenIdx) next++
+        if (next < segments.length) {
+          speakSegment(next)
+        } else {
+          ttsCancelledIntentionallyRef.current = true
+          synth.cancel()
+          onSentenceFinished()
+        }
       }
 
       if (!isWaitingForPauseIntervalRef.current) {
@@ -1348,6 +1388,7 @@ export default function Workspace() {
     }
 
     return () => {
+      ttsSkipWordRef.current = null
       // Mark as intentional so the cancelled utterance's onerror doesn't kill playback
       ttsCancelledIntentionallyRef.current = true
       synth.cancel()
@@ -2240,26 +2281,43 @@ export default function Workspace() {
                 </div>
               )}
               {selectedLesson?.youtube_url?.startsWith('text://') && ttsWordByWord && (
-                <div className="relative group">
-                  <div className="bg-gray-900 text-white px-3 py-1.5 rounded-lg flex items-center gap-2 text-xs cursor-pointer">
-                    <span>Word Gap: {ttsWordInterval}s</span>
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                    </svg>
-                  </div>
-                  <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg text-gray-900 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-10 min-w-[100px]">
-                    {[0, 0.2, 0.4, 0.6, 0.8, 1].map((sec) => (
-                      <button
-                        key={sec}
-                        onClick={() => setTtsWordInterval(sec)}
-                        className={`w-full text-left px-4 py-2 text-xs text-gray-900 hover:bg-gray-100 ${ttsWordInterval === sec ? 'bg-gray-100 font-semibold' : ''
-                          }`}
-                      >
-                        {sec}s
-                      </button>
-                    ))}
-                  </div>
+                <div className="bg-gray-900 text-white px-3 py-1.5 rounded-lg flex items-center gap-1.5 text-xs">
+                  <span>Word Gap:</span>
+                  <input
+                    key={ttsWordInterval}
+                    type="number"
+                    defaultValue={ttsWordInterval}
+                    min={0}
+                    max={10}
+                    step={0.05}
+                    title="Seconds between spoken words (0–10)"
+                    onKeyDown={(e) => {
+                      // Keep keystrokes local so global shortcuts (-, =, Enter…) don't fire
+                      e.stopPropagation()
+                      if (e.key === 'Enter') e.currentTarget.blur()
+                    }}
+                    onBlur={(e) => {
+                      const v = parseFloat(e.currentTarget.value)
+                      if (Number.isFinite(v)) {
+                        setTtsWordInterval(Math.min(10, Math.max(0, v)))
+                      } else {
+                        e.currentTarget.value = String(ttsWordInterval)
+                      }
+                    }}
+                    className="w-14 bg-gray-800 border border-gray-700 rounded px-1.5 py-0.5 text-xs text-white text-right focus:outline-none focus:border-gray-500"
+                  />
+                  <span>s</span>
                 </div>
+              )}
+              {selectedLesson?.youtube_url?.startsWith('text://') && ttsWordByWord && (
+                <button
+                  type="button"
+                  onClick={() => ttsSkipWordRef.current?.()}
+                  title={`Skip the current word and jump to the next one (${displayKey(keybinds.skipWord)})`}
+                  className="bg-gray-900 text-white px-3 py-1.5 rounded-lg text-xs cursor-pointer hover:bg-gray-800 transition-colors"
+                >
+                  Skip ⏭
+                </button>
               )}
               <div className="relative group">
                 <div className="bg-gray-900 text-white px-3 py-1.5 rounded-lg flex items-center gap-2 text-xs cursor-pointer">
@@ -2664,6 +2722,9 @@ export default function Workspace() {
           </span>
           <span>
             <kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">{displayKey(keybinds.wordByWord)}</kbd> WbW
+          </span>
+          <span>
+            <kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">{displayKey(keybinds.skipWord)}</kbd> skip word
           </span>
           <span>
             <kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">{displayKey(keybinds.translate)}</kbd> translate
