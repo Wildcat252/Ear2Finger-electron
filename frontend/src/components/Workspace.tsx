@@ -37,10 +37,10 @@ const SPEED_OPTIONS = [0.2, 0.4, 0.6, 0.8, 1, 1.2]
 // interpolated smoothly between anchors.
 function wordGapMultiplier(word: string): number {
   const length = word.replace(/[^\w]/g, '').length
-  if (length <= 3) return 0.5
+  if (length <= 3) return 0.3
   if (length <= 6) return 1
-  if (length <= 10) return 2 ** ((length - 6) / 2)
-  return 2 ** (2 + (length - 10) / 5)
+  if (length <= 10) return 3 ** ((length - 6) / 2)
+  return 3 ** (2 + (length - 10) / 5)
 }
 
 // Common punctuation spoken by name in word-by-word mode so the learner
@@ -1276,7 +1276,7 @@ export default function Workspace() {
         punctNames.forEach((name, i) => {
           segments.push({
             text: name,
-            gapMultiplier: 0.5,
+            gapMultiplier: 0.3,
             tokenIdx,
             lastOfToken: i === punctNames.length - 1,
           })
@@ -2589,8 +2589,9 @@ export default function Workspace() {
                               if (e.key === 'Tab') {
                                 e.preventDefault()
                                 if (wordHintIndex === idx) {
+                                  // Close the hint only — keep the cursor here so the
+                                  // learner can type the word they just peeked at
                                   setWordHintIndex(null)
-                                  wordInputRefs.current[idx + 1]?.focus()
                                 } else {
                                   const currentVal = wordInputs[idx] ?? ''
                                   const wordComplete = normalizeWord(currentVal) === normalizeWord(word)
