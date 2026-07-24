@@ -2,6 +2,9 @@
 /**
  * Dev orchestrator: embedded Qdrant (local path) → uvicorn → Vite → Electron (window only).
  * Cross-platform (Windows, macOS, Linux).
+ *
+ * Pass --web to skip the Electron window and open the app in the default
+ * browser instead (same backend, same database).
  */
 import { spawn, execFileSync } from 'child_process'
 import fs from 'fs'
@@ -175,6 +178,24 @@ async function main() {
   children.push(vite)
 
   await waitPort('127.0.0.1', 3000, 120000)
+
+  if (process.argv.includes('--web')) {
+    // Web-only mode: no Electron window, just open the browser.
+    const url = 'http://127.0.0.1:3000'
+    console.log(`\nWeb mode — Ear2Finger is running at ${url} (Ctrl+C to stop)\n`)
+    const opener =
+      process.platform === 'darwin' ? ['open', [url]] :
+      process.platform === 'win32' ? ['cmd', ['/c', 'start', '', url]] :
+      ['xdg-open', [url]]
+    spawn(opener[0], opener[1], { stdio: 'ignore', detached: true }).unref()
+
+    uvicorn.on('exit', (code) => {
+      if (code !== 0 && code !== null) console.error(`Uvicorn exited with ${code}`)
+      shutdown()
+    })
+    vite.on('exit', shutdown)
+    return
+  }
 
   /** Real electron.exe / Electron.app binary — avoids Windows cmd + `.bin/electron.cmd` path/quoting bugs. */
   let electronExe

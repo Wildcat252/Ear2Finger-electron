@@ -115,7 +115,7 @@ The repository root includes an **Electron** shell that starts a **PyInstaller-b
 
 **Linux `.deb` installed but nothing opens:** run the app binary from a terminal (see `dpkg -L ear2finger | grep /bin/`) so stderr is visible. Builds write **`startup.log`** and **`uvicorn.log`** under `~/.config/ear2finger/`. With external Qdrant, **`qdrant.log`** is also written there.
 
-You can keep using the plain web stack (`run-dev.sh` or Vite + Uvicorn) with **either** `QDRANT_LOCAL_PATH` **or** an HTTP Qdrant endpoint — see `backend/.env.example`.
+You can also run the app in the browser without an Electron window: `npm run web:dev` (or double-click `Web.command` on macOS) — same backend, same database, opens `http://127.0.0.1:3000`.
 
 ## Setup Instructions
 
