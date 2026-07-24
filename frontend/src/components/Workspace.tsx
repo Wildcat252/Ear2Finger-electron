@@ -43,6 +43,34 @@ function wordGapMultiplier(word: string): number {
   return 3 ** (2 + (length - 10) / 5)
 }
 
+// Short ascending arpeggio via Web Audio — no bundled asset, works offline in
+// Electron and web. Lazily creates one AudioContext, reused across calls.
+let celebrateCtx: AudioContext | null = null
+function playCelebrationChime(): void {
+  try {
+    celebrateCtx ??= new AudioContext()
+    const ctx = celebrateCtx
+    if (ctx.state === 'suspended') ctx.resume()
+    const now = ctx.currentTime
+    const notes = [523.25, 659.25, 783.99, 1046.5] // C5 E5 G5 C6
+    notes.forEach((freq, i) => {
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.type = 'triangle'
+      osc.frequency.value = freq
+      const t = now + i * 0.09
+      gain.gain.setValueAtTime(0.0001, t)
+      gain.gain.exponentialRampToValueAtTime(0.28, t + 0.02)
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.28)
+      osc.connect(gain).connect(ctx.destination)
+      osc.start(t)
+      osc.stop(t + 0.3)
+    })
+  } catch {
+    /* audio unavailable — silent */
+  }
+}
+
 // Common punctuation spoken by name in word-by-word mode so the learner
 // knows to type it: "hello," is read as "hello" (word gap) "comma".
 const SPOKEN_PUNCTUATION: Record<string, string> = {
@@ -199,6 +227,9 @@ export default function Workspace() {
   const [translation, setTranslation] = useState<string | null>(null)
   const [translateLang, setTranslateLang] = useState<string>(
     () => localStorage.getItem('ear2finger-translate-lang') ?? 'vi'
+  )
+  const [soundOn, setSoundOn] = useState<boolean>(
+    () => (localStorage.getItem('ear2finger-celebrate-sound') ?? 'on') === 'on'
   )
   // Read once per mount; Workspace remounts when returning from Settings
   const [keybinds] = useState(loadKeybindings)
@@ -1116,6 +1147,15 @@ export default function Workspace() {
   useEffect(() => {
     isCurrentSentenceFullyCorrectRef.current = Boolean(isCurrentSentenceFullyCorrect)
   }, [isCurrentSentenceFullyCorrect])
+
+  // Play a celebration chime on the false→true edge of full correctness.
+  // Initialized to the current value so a restored-complete sentence stays silent on mount.
+  const prevFullyCorrectRef = useRef<boolean>(Boolean(isCurrentSentenceFullyCorrect))
+  useEffect(() => {
+    const now = Boolean(isCurrentSentenceFullyCorrect)
+    if (now && !prevFullyCorrectRef.current && soundOn) playCelebrationChime()
+    prevFullyCorrectRef.current = now
+  }, [isCurrentSentenceFullyCorrect, soundOn, currentSentenceIndex])
 
   const hasCompletedOneSentence =
     sentences.length > 0 &&
@@ -2265,6 +2305,18 @@ export default function Workspace() {
                   </div>
                 </div>
               )}
+              <div
+                className={`px-3 py-1.5 rounded-lg flex items-center gap-2 text-xs cursor-pointer transition-colors ${soundOn ? 'bg-gray-900 text-white' : 'bg-gray-200 text-gray-600'
+                  }`}
+                onClick={() => {
+                  const next = !soundOn
+                  setSoundOn(next)
+                  localStorage.setItem('ear2finger-celebrate-sound', next ? 'on' : 'off')
+                }}
+                title="Play a chime when a sentence is fully correct"
+              >
+                <span>{soundOn ? '🔊' : '🔇'} Sound</span>
+              </div>
               {selectedLesson?.youtube_url?.startsWith('text://') && (
                 <div
                   className={`px-3 py-1.5 rounded-lg flex items-center gap-2 text-xs cursor-pointer transition-colors ${ttsWordByWord
