@@ -20,13 +20,46 @@ import {
   displayKey,
   type KeybindAction,
 } from '../keybindings'
+import {
+  AUDIO_DEFAULTS,
+  WAVEFORMS,
+  ERROR_FREQ_MIN,
+  ERROR_FREQ_MAX,
+  ERROR_DURATION_MIN,
+  ERROR_DURATION_MAX,
+  NOTE_COUNT_MIN,
+  NOTE_COUNT_MAX,
+  NOTE_SPACING_MIN,
+  NOTE_SPACING_MAX,
+  loadAudioSettings,
+  saveAudioSettings,
+  playCelebrationChime,
+  playMistakeBuzz,
+  type AudioSettings,
+  type Waveform,
+} from '../audio'
+import { useWorkspace } from '../contexts/WorkspaceContext'
+import { usePremiumVoices } from '../voices'
 
-type SettingsSection = 'ai-api-key' | 'keybindings' | 'about'
+type SettingsSection = 'ai-api-key' | 'keybindings' | 'audio' | 'playback' | 'about'
 
 const APP_VERSION = `${__APP_SEMVER__} (${__APP_COMMIT__})`
 
 export default function Settings() {
   const navigate = useNavigate()
+  const {
+    pauseInterval,
+    setPauseInterval,
+    ignorePunctuation,
+    setIgnorePunctuation,
+    ignoreCase,
+    setIgnoreCase,
+    repeatCount,
+    setRepeatCount,
+    ttsVoiceName,
+    setTtsVoiceName,
+  } = useWorkspace()
+  const availableVoices = usePremiumVoices()
   const [activeSection, setActiveSection] = useState<SettingsSection>('ai-api-key')
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [apiKey, setApiKey] = useState('')
@@ -42,6 +75,15 @@ export default function Settings() {
   const [keybinds, setKeybinds] = useState(loadKeybindings)
   const [capturingAction, setCapturingAction] = useState<KeybindAction | null>(null)
   const [keybindError, setKeybindError] = useState<string | null>(null)
+  const [audio, setAudio] = useState<AudioSettings>(loadAudioSettings)
+
+  const updateAudio = useCallback((patch: Partial<AudioSettings>) => {
+    setAudio((prev) => {
+      const next = { ...prev, ...patch }
+      saveAudioSettings(next)
+      return next
+    })
+  }, [])
 
   const loadAIKeys = useCallback(() => {
     setAiKeysLoading(true)
@@ -122,6 +164,8 @@ export default function Settings() {
   const settingsSections = [
     { id: 'ai-api-key' as SettingsSection, label: 'AI API-KEY' },
     { id: 'keybindings' as SettingsSection, label: 'KEYBOARD SHORTCUTS' },
+    { id: 'audio' as SettingsSection, label: 'AUDIO' },
+    { id: 'playback' as SettingsSection, label: 'PLAYBACK & GRADING' },
     { id: 'about' as SettingsSection, label: 'ABOUT' },
   ]
 
@@ -227,6 +271,15 @@ export default function Settings() {
                 c-1.854-0.088-3.711-0.135-5.574-0.089V94.252c0-0.73,0.594-1.323,1.323-1.323h323.702c0.73,0,1.323,0.594,1.323,1.323V273.234z"/>
             </svg>
             Workspace
+          </button>
+          <button
+            onClick={() => navigate('/practice')}
+            className="px-2 py-2 md:px-4 text-gray-600 hover:bg-gray-100 rounded-lg flex items-center gap-1.5 md:gap-2 text-sm md:text-base"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+            </svg>
+            Practice
           </button>
           <button
             onClick={() => navigate('/dashboard')}
@@ -461,6 +514,381 @@ export default function Settings() {
                   >
                     Reset to defaults
                   </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeSection === 'audio' && (
+            <div className="w-full max-w-3xl text-left">
+              <h1 className="text-2xl font-bold text-gray-900 mb-2">AUDIO</h1>
+              <p className="text-sm text-gray-600 mb-6">
+                Feedback sounds during dictation practice. Each can be toggled on or off and has its own volume.
+              </p>
+
+              <div className="space-y-6">
+                {/* TTS voice */}
+                <div className="rounded-lg border border-gray-200 p-4">
+                  <p className="text-sm font-semibold text-gray-900">Dictation voice</p>
+                  <p className="text-xs text-gray-500 mb-3">Voice used to read text lessons aloud.</p>
+                  <select
+                    value={ttsVoiceName}
+                    onChange={(e) => setTtsVoiceName(e.target.value)}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  >
+                    <option value="">Default</option>
+                    {availableVoices.map((v) => (
+                      <option key={v.name} value={v.name}>
+                        {v.name} ({v.lang})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Correct sound */}
+                <div className="rounded-lg border border-gray-200 p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-semibold text-gray-900">Correct sound</p>
+                      <p className="text-xs text-gray-500">Chime when a sentence is fully correct.</p>
+                    </div>
+                    <label className="inline-flex items-center cursor-pointer">
+                      <input
+                        type="checkbox"
+                        className="sr-only peer"
+                        checked={audio.correctEnabled}
+                        onChange={(e) => updateAudio({ correctEnabled: e.target.checked })}
+                      />
+                      <div className="relative w-11 h-6 bg-gray-300 rounded-full peer peer-checked:bg-indigo-600 after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-5"></div>
+                    </label>
+                  </div>
+                  <div className="mt-4 flex items-center gap-3">
+                    <span className="text-xs text-gray-500 w-14 shrink-0">Volume</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      value={Math.round(audio.correctVolume * 100)}
+                      disabled={!audio.correctEnabled}
+                      onChange={(e) => updateAudio({ correctVolume: Number(e.target.value) / 100 })}
+                      className="flex-1 accent-indigo-600 disabled:opacity-40"
+                    />
+                    <span className="text-xs text-gray-600 w-10 text-right tabular-nums">{Math.round(audio.correctVolume * 100)}%</span>
+                    <button
+                      type="button"
+                      onClick={() => playCelebrationChime({
+                        volume: audio.correctVolume,
+                        baseFreq: audio.correctBaseFreq,
+                        noteCount: audio.correctNoteCount,
+                        noteSpacing: audio.correctNoteSpacing,
+                        noteDuration: audio.correctNoteDuration,
+                        waveform: audio.correctWaveform,
+                      })}
+                      disabled={!audio.correctEnabled}
+                      className="px-3 py-1.5 text-xs font-medium text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      Test
+                    </button>
+                  </div>
+
+                  {/* Waveform */}
+                  <div className="mt-3 flex items-center gap-3">
+                    <span className="text-xs text-gray-500 w-14 shrink-0">Waveform</span>
+                    <div className="flex gap-1">
+                      {WAVEFORMS.map((wf) => (
+                        <button
+                          key={wf}
+                          type="button"
+                          disabled={!audio.correctEnabled}
+                          onClick={() => updateAudio({ correctWaveform: wf as Waveform })}
+                          className={`px-2.5 py-1 text-xs rounded-lg border capitalize transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${audio.correctWaveform === wf
+                            ? 'border-indigo-400 bg-indigo-50 text-indigo-800 font-semibold'
+                            : 'border-gray-300 bg-white text-gray-900 hover:bg-gray-50'
+                            }`}
+                        >
+                          {wf}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Base pitch */}
+                  <div className="mt-3 flex items-center gap-3">
+                    <span className="text-xs text-gray-500 w-14 shrink-0">Base Hz</span>
+                    <input
+                      type="range"
+                      min={ERROR_FREQ_MIN}
+                      max={ERROR_FREQ_MAX}
+                      value={Math.round(audio.correctBaseFreq)}
+                      disabled={!audio.correctEnabled}
+                      onChange={(e) => updateAudio({ correctBaseFreq: Number(e.target.value) })}
+                      className="flex-1 accent-indigo-600 disabled:opacity-40"
+                    />
+                    <span className="text-xs text-gray-600 w-14 text-right tabular-nums">{Math.round(audio.correctBaseFreq)} Hz</span>
+                  </div>
+
+                  {/* Note count */}
+                  <div className="mt-3 flex items-center gap-3">
+                    <span className="text-xs text-gray-500 w-14 shrink-0">Notes</span>
+                    <input
+                      type="range"
+                      min={NOTE_COUNT_MIN}
+                      max={NOTE_COUNT_MAX}
+                      step={1}
+                      value={audio.correctNoteCount}
+                      disabled={!audio.correctEnabled}
+                      onChange={(e) => updateAudio({ correctNoteCount: Number(e.target.value) })}
+                      className="flex-1 accent-indigo-600 disabled:opacity-40"
+                    />
+                    <span className="text-xs text-gray-600 w-14 text-right tabular-nums">{audio.correctNoteCount}</span>
+                  </div>
+
+                  {/* Note spacing */}
+                  <div className="mt-3 flex items-center gap-3">
+                    <span className="text-xs text-gray-500 w-14 shrink-0">Spacing</span>
+                    <input
+                      type="range"
+                      min={Math.round(NOTE_SPACING_MIN * 1000)}
+                      max={Math.round(NOTE_SPACING_MAX * 1000)}
+                      step={10}
+                      value={Math.round(audio.correctNoteSpacing * 1000)}
+                      disabled={!audio.correctEnabled}
+                      onChange={(e) => updateAudio({ correctNoteSpacing: Number(e.target.value) / 1000 })}
+                      className="flex-1 accent-indigo-600 disabled:opacity-40"
+                    />
+                    <span className="text-xs text-gray-600 w-14 text-right tabular-nums">{Math.round(audio.correctNoteSpacing * 1000)} ms</span>
+                  </div>
+
+                  {/* Note duration */}
+                  <div className="mt-3 flex items-center gap-3">
+                    <span className="text-xs text-gray-500 w-14 shrink-0">Ring</span>
+                    <input
+                      type="range"
+                      min={Math.round(ERROR_DURATION_MIN * 1000)}
+                      max={Math.round(ERROR_DURATION_MAX * 1000)}
+                      step={10}
+                      value={Math.round(audio.correctNoteDuration * 1000)}
+                      disabled={!audio.correctEnabled}
+                      onChange={(e) => updateAudio({ correctNoteDuration: Number(e.target.value) / 1000 })}
+                      className="flex-1 accent-indigo-600 disabled:opacity-40"
+                    />
+                    <span className="text-xs text-gray-600 w-14 text-right tabular-nums">{Math.round(audio.correctNoteDuration * 1000)} ms</span>
+                  </div>
+                </div>
+
+                {/* Error sound */}
+                <div className="rounded-lg border border-gray-200 p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-semibold text-gray-900">Error sound</p>
+                      <p className="text-xs text-gray-500">Buzz on a wrong keystroke.</p>
+                    </div>
+                    <label className="inline-flex items-center cursor-pointer">
+                      <input
+                        type="checkbox"
+                        className="sr-only peer"
+                        checked={audio.errorEnabled}
+                        onChange={(e) => updateAudio({ errorEnabled: e.target.checked })}
+                      />
+                      <div className="relative w-11 h-6 bg-gray-300 rounded-full peer peer-checked:bg-indigo-600 after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-5"></div>
+                    </label>
+                  </div>
+                  <div className="mt-4 flex items-center gap-3">
+                    <span className="text-xs text-gray-500 w-14 shrink-0">Volume</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      value={Math.round(audio.errorVolume * 100)}
+                      disabled={!audio.errorEnabled}
+                      onChange={(e) => updateAudio({ errorVolume: Number(e.target.value) / 100 })}
+                      className="flex-1 accent-indigo-600 disabled:opacity-40"
+                    />
+                    <span className="text-xs text-gray-600 w-10 text-right tabular-nums">{Math.round(audio.errorVolume * 100)}%</span>
+                    <button
+                      type="button"
+                      onClick={() => playMistakeBuzz({
+                        volume: audio.errorVolume,
+                        freqStart: audio.errorFreqStart,
+                        freqEnd: audio.errorFreqEnd,
+                        duration: audio.errorDuration,
+                        waveform: audio.errorWaveform,
+                      })}
+                      disabled={!audio.errorEnabled}
+                      className="px-3 py-1.5 text-xs font-medium text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      Test
+                    </button>
+                  </div>
+
+                  {/* Waveform */}
+                  <div className="mt-3 flex items-center gap-3">
+                    <span className="text-xs text-gray-500 w-14 shrink-0">Waveform</span>
+                    <div className="flex gap-1">
+                      {WAVEFORMS.map((wf) => (
+                        <button
+                          key={wf}
+                          type="button"
+                          disabled={!audio.errorEnabled}
+                          onClick={() => updateAudio({ errorWaveform: wf as Waveform })}
+                          className={`px-2.5 py-1 text-xs rounded-lg border capitalize transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${audio.errorWaveform === wf
+                            ? 'border-indigo-400 bg-indigo-50 text-indigo-800 font-semibold'
+                            : 'border-gray-300 bg-white text-gray-900 hover:bg-gray-50'
+                            }`}
+                        >
+                          {wf}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Start frequency */}
+                  <div className="mt-3 flex items-center gap-3">
+                    <span className="text-xs text-gray-500 w-14 shrink-0">Start Hz</span>
+                    <input
+                      type="range"
+                      min={ERROR_FREQ_MIN}
+                      max={ERROR_FREQ_MAX}
+                      value={Math.round(audio.errorFreqStart)}
+                      disabled={!audio.errorEnabled}
+                      onChange={(e) => updateAudio({ errorFreqStart: Number(e.target.value) })}
+                      className="flex-1 accent-indigo-600 disabled:opacity-40"
+                    />
+                    <span className="text-xs text-gray-600 w-14 text-right tabular-nums">{Math.round(audio.errorFreqStart)} Hz</span>
+                  </div>
+
+                  {/* End frequency */}
+                  <div className="mt-3 flex items-center gap-3">
+                    <span className="text-xs text-gray-500 w-14 shrink-0">End Hz</span>
+                    <input
+                      type="range"
+                      min={ERROR_FREQ_MIN}
+                      max={ERROR_FREQ_MAX}
+                      value={Math.round(audio.errorFreqEnd)}
+                      disabled={!audio.errorEnabled}
+                      onChange={(e) => updateAudio({ errorFreqEnd: Number(e.target.value) })}
+                      className="flex-1 accent-indigo-600 disabled:opacity-40"
+                    />
+                    <span className="text-xs text-gray-600 w-14 text-right tabular-nums">{Math.round(audio.errorFreqEnd)} Hz</span>
+                  </div>
+
+                  {/* Duration */}
+                  <div className="mt-3 flex items-center gap-3">
+                    <span className="text-xs text-gray-500 w-14 shrink-0">Duration</span>
+                    <input
+                      type="range"
+                      min={Math.round(ERROR_DURATION_MIN * 1000)}
+                      max={Math.round(ERROR_DURATION_MAX * 1000)}
+                      step={10}
+                      value={Math.round(audio.errorDuration * 1000)}
+                      disabled={!audio.errorEnabled}
+                      onChange={(e) => updateAudio({ errorDuration: Number(e.target.value) / 1000 })}
+                      className="flex-1 accent-indigo-600 disabled:opacity-40"
+                    />
+                    <span className="text-xs text-gray-600 w-14 text-right tabular-nums">{Math.round(audio.errorDuration * 1000)} ms</span>
+                  </div>
+                </div>
+
+                <div className="pt-4 border-t border-gray-200 flex items-center justify-between">
+                  <p className="text-xs text-gray-500">Changes apply the next time you open the Workspace.</p>
+                  <button
+                    type="button"
+                    onClick={() => { setAudio({ ...AUDIO_DEFAULTS }); saveAudioSettings({ ...AUDIO_DEFAULTS }) }}
+                    className="px-3 py-1.5 text-sm font-medium text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50"
+                  >
+                    Reset to defaults
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeSection === 'playback' && (
+            <div className="w-full max-w-3xl text-left">
+              <h1 className="text-2xl font-bold text-gray-900 mb-2">PLAYBACK &amp; GRADING</h1>
+              <p className="text-sm text-gray-600 mb-6">
+                How sentences repeat and pause during practice, and how strictly your typing is graded.
+              </p>
+
+              <div className="space-y-4">
+                {/* Repeat count */}
+                <div className="flex items-center justify-between rounded-lg border border-gray-200 p-4">
+                  <div>
+                    <p className="text-sm font-semibold text-gray-900">Repeat count</p>
+                    <p className="text-xs text-gray-500">How many times each sentence plays before advancing (∞ = until you move on).</p>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    {([0, 1, 3, 5, 10, '∞'] as const).map((count) => (
+                      <button
+                        key={String(count)}
+                        type="button"
+                        onClick={() => setRepeatCount(count === '∞' ? '∞' : count)}
+                        className={`px-3 py-1.5 text-sm rounded-lg border transition-colors ${repeatCount === count
+                          ? 'border-indigo-400 bg-indigo-50 text-indigo-800 font-semibold'
+                          : 'border-gray-300 bg-white text-gray-900 hover:bg-gray-50'
+                          }`}
+                      >
+                        {count === '∞' ? '∞' : count}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Pause interval */}
+                <div className="flex items-center justify-between rounded-lg border border-gray-200 p-4">
+                  <div>
+                    <p className="text-sm font-semibold text-gray-900">Pause between plays</p>
+                    <p className="text-xs text-gray-500">Silent gap after a sentence finishes, in seconds.</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={0}
+                      max={60}
+                      step={0.5}
+                      value={pauseInterval}
+                      onChange={(e) => {
+                        const v = parseFloat(e.target.value)
+                        if (Number.isFinite(v)) setPauseInterval(Math.min(60, Math.max(0, v)))
+                      }}
+                      className="w-20 border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                    <span className="text-sm text-gray-500">sec</span>
+                  </div>
+                </div>
+
+                {/* Ignore punctuation */}
+                <div className="flex items-center justify-between rounded-lg border border-gray-200 p-4">
+                  <div>
+                    <p className="text-sm font-semibold text-gray-900">Ignore punctuation</p>
+                    <p className="text-xs text-gray-500">When on, punctuation isn't required to match (commas, periods, etc.).</p>
+                  </div>
+                  <label className="inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      className="sr-only peer"
+                      checked={ignorePunctuation}
+                      onChange={(e) => setIgnorePunctuation(e.target.checked)}
+                    />
+                    <div className="relative w-11 h-6 bg-gray-300 rounded-full peer peer-checked:bg-indigo-600 after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-5"></div>
+                  </label>
+                </div>
+
+                {/* Ignore case */}
+                <div className="flex items-center justify-between rounded-lg border border-gray-200 p-4">
+                  <div>
+                    <p className="text-sm font-semibold text-gray-900">Ignore case</p>
+                    <p className="text-xs text-gray-500">When on, uppercase and lowercase are treated the same.</p>
+                  </div>
+                  <label className="inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      className="sr-only peer"
+                      checked={ignoreCase}
+                      onChange={(e) => setIgnoreCase(e.target.checked)}
+                    />
+                    <div className="relative w-11 h-6 bg-gray-300 rounded-full peer peer-checked:bg-indigo-600 after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-5"></div>
+                  </label>
                 </div>
               </div>
             </div>

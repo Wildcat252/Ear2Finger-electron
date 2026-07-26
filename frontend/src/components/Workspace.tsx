@@ -19,6 +19,8 @@ import {
 } from '../api'
 import { useWorkspace, type Lesson } from '../contexts/WorkspaceContext'
 import { loadKeybindings, displayKey } from '../keybindings'
+import { loadAudioSettings, playCelebrationChime, playMistakeBuzz } from '../audio'
+import { usePremiumVoices } from '../voices'
 import ImportModal from './ImportModal'
 import LessonHistory from './LessonHistory'
 
@@ -37,38 +39,10 @@ const SPEED_OPTIONS = [0.2, 0.4, 0.6, 0.8, 1, 1.2]
 // interpolated smoothly between anchors.
 function wordGapMultiplier(word: string): number {
   const length = word.replace(/[^\w]/g, '').length
-  if (length <= 3) return 0.3
+  if (length <= 3) return 0.4
   if (length <= 6) return 1
-  if (length <= 10) return 3 ** ((length - 6) / 2)
-  return 3 ** (2 + (length - 10) / 5)
-}
-
-// Short ascending arpeggio via Web Audio — no bundled asset, works offline in
-// Electron and web. Lazily creates one AudioContext, reused across calls.
-let celebrateCtx: AudioContext | null = null
-function playCelebrationChime(): void {
-  try {
-    celebrateCtx ??= new AudioContext()
-    const ctx = celebrateCtx
-    if (ctx.state === 'suspended') ctx.resume()
-    const now = ctx.currentTime
-    const notes = [523.25, 659.25, 783.99, 1046.5] // C5 E5 G5 C6
-    notes.forEach((freq, i) => {
-      const osc = ctx.createOscillator()
-      const gain = ctx.createGain()
-      osc.type = 'triangle'
-      osc.frequency.value = freq
-      const t = now + i * 0.09
-      gain.gain.setValueAtTime(0.0001, t)
-      gain.gain.exponentialRampToValueAtTime(0.28, t + 0.02)
-      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.28)
-      osc.connect(gain).connect(ctx.destination)
-      osc.start(t)
-      osc.stop(t + 0.3)
-    })
-  } catch {
-    /* audio unavailable — silent */
-  }
+  if (length <= 10) return 2.5 ** ((length - 6) / 2)
+  return 2.5 ** (2 + (length - 10) / 5)
 }
 
 // Common punctuation spoken by name in word-by-word mode so the learner
@@ -118,15 +92,10 @@ export default function Workspace() {
     playbackSpeed,
     setPlaybackSpeed,
     pauseInterval,
-    setPauseInterval,
     ignorePunctuation,
-    setIgnorePunctuation,
     ignoreCase,
-    setIgnoreCase,
     repeatCount,
-    setRepeatCount,
     ttsVoiceName,
-    setTtsVoiceName,
     ttsWordByWord,
     setTtsWordByWord,
     ttsWordInterval,
@@ -151,23 +120,7 @@ export default function Workspace() {
   const sentenceIndexFromPlaybackRef = useRef(false)
 
   // TTS voices
-  const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([])
-
-  useEffect(() => {
-    const loadVoices = () => {
-      const voices = window.speechSynthesis.getVoices()
-      if (voices.length) {
-        // Only keep English voices, sorted by name
-        const english = voices
-          .filter(v => v.name.toLowerCase().includes('premium'))
-          .sort((a, b) => a.name.localeCompare(b.name))
-        setAvailableVoices(english)
-      }
-    }
-    loadVoices()
-    window.speechSynthesis.onvoiceschanged = loadVoices
-    return () => { window.speechSynthesis.onvoiceschanged = null }
-  }, [])
+  const availableVoices = usePremiumVoices()
 
   const wordQueueIndexRef = useRef(0)
   const wordQueueTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -228,11 +181,24 @@ export default function Workspace() {
   const [translateLang, setTranslateLang] = useState<string>(
     () => localStorage.getItem('ear2finger-translate-lang') ?? 'vi'
   )
-  const [soundOn, setSoundOn] = useState<boolean>(
-    () => (localStorage.getItem('ear2finger-celebrate-sound') ?? 'on') === 'on'
-  )
   // Read once per mount; Workspace remounts when returning from Settings
   const [keybinds] = useState(loadKeybindings)
+  const [audio] = useState(loadAudioSettings)
+  const errorBuzzOptions = {
+    volume: audio.errorVolume,
+    freqStart: audio.errorFreqStart,
+    freqEnd: audio.errorFreqEnd,
+    duration: audio.errorDuration,
+    waveform: audio.errorWaveform,
+  }
+  const correctChimeOptions = {
+    volume: audio.correctVolume,
+    baseFreq: audio.correctBaseFreq,
+    noteCount: audio.correctNoteCount,
+    noteSpacing: audio.correctNoteSpacing,
+    noteDuration: audio.correctNoteDuration,
+    waveform: audio.correctWaveform,
+  }
   const translationCacheRef = useRef<Map<string, string>>(new Map())
   const [practiceLoading, setPracticeLoading] = useState(false)
   const [practiceError, setPracticeError] = useState<string | null>(null)
@@ -243,6 +209,24 @@ export default function Workspace() {
   const [lessonMenuOpen, setLessonMenuOpen] = useState<number | null>(null)
   const [playlistMenuOpen, setPlaylistMenuOpen] = useState(false)
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
+  // Desktop sidebar collapse, remembered across visits
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+    () => localStorage.getItem('ear2finger-workspace-sidebar') === 'collapsed'
+  )
+  useEffect(() => {
+    localStorage.setItem(
+      'ear2finger-workspace-sidebar',
+      sidebarCollapsed ? 'collapsed' : 'expanded'
+    )
+  }, [sidebarCollapsed])
+  /** One header button drives both breakpoints: drawer on mobile, collapse on desktop. */
+  const toggleSidebar = useCallback(() => {
+    if (window.matchMedia('(min-width: 768px)').matches) {
+      setSidebarCollapsed((v) => !v)
+    } else {
+      setMobileSidebarOpen((v) => !v)
+    }
+  }, [])
   const [lessonProgress, setLessonProgress] = useState<Record<number, number>>({})
   const [lastInputFeedback, setLastInputFeedback] = useState<{
     wordIndex: number
@@ -1153,9 +1137,11 @@ export default function Workspace() {
   const prevFullyCorrectRef = useRef<boolean>(Boolean(isCurrentSentenceFullyCorrect))
   useEffect(() => {
     const now = Boolean(isCurrentSentenceFullyCorrect)
-    if (now && !prevFullyCorrectRef.current && soundOn) playCelebrationChime()
+    if (now && !prevFullyCorrectRef.current && audio.correctEnabled) {
+      playCelebrationChime(correctChimeOptions)
+    }
     prevFullyCorrectRef.current = now
-  }, [isCurrentSentenceFullyCorrect, soundOn, currentSentenceIndex])
+  }, [isCurrentSentenceFullyCorrect, audio, currentSentenceIndex])
 
   const hasCompletedOneSentence =
     sentences.length > 0 &&
@@ -1316,7 +1302,7 @@ export default function Workspace() {
         punctNames.forEach((name, i) => {
           segments.push({
             text: name,
-            gapMultiplier: 0.3,
+            gapMultiplier: 0.4,
             tokenIdx,
             lastOfToken: i === punctNames.length - 1,
           })
@@ -1763,6 +1749,19 @@ export default function Workspace() {
         <div className="flex items-center gap-2 order-1 shrink-0">
           <img src="/icon.png" alt="Ear2Finger" className="w-8 h-8" />
           <span className="text-lg font-semibold text-gray-900">Ear2Finger</span>
+          <button
+            type="button"
+            onClick={toggleSidebar}
+            title="Toggle sidebar"
+            aria-label="Toggle sidebar"
+            aria-controls="workspace-lessons-sidebar"
+            className="p-1.5 rounded-lg text-gray-500 hover:text-gray-900 hover:bg-gray-100"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24" aria-hidden>
+              <rect x="3" y="4" width="18" height="16" rx="2" />
+              <line x1="9" y1="4" x2="9" y2="20" />
+            </svg>
+          </button>
         </div>
 
         <nav className="order-3 basis-full flex flex-wrap items-center gap-1 md:order-2 md:basis-auto md:flex-nowrap">
@@ -1807,6 +1806,15 @@ export default function Workspace() {
             Workspace
           </button>
           <button
+            onClick={() => navigate('/practice')}
+            className="px-2 py-2 md:px-4 text-gray-600 hover:bg-gray-100 rounded-lg flex items-center gap-1.5 md:gap-2 text-sm md:text-base"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+            </svg>
+            Practice
+          </button>
+          <button
             onClick={() => navigate('/dashboard')}
             className="px-2 py-2 md:px-4 text-gray-600 hover:bg-gray-100 rounded-lg flex items-center gap-1.5 md:gap-2 text-sm md:text-base"
           >
@@ -1838,17 +1846,8 @@ export default function Workspace() {
         <aside
           id="workspace-lessons-sidebar"
           className={`w-full md:w-80 shrink-0 max-md:max-h-[min(55vh,440px)] md:max-h-none bg-gray-50 border-gray-200 border-b md:border-b-0 md:border-r flex flex-col min-h-0 ${!mobileSidebarOpen ? 'max-md:hidden' : ''
-            }`}
+            } ${sidebarCollapsed ? 'md:hidden' : ''}`}
         >
-          <div className="md:hidden flex justify-end border-b border-gray-200 px-3 py-1.5 bg-gray-50">
-            <button
-              type="button"
-              onClick={() => setMobileSidebarOpen(false)}
-              className="text-sm font-medium text-indigo-700 hover:text-indigo-900 py-1 px-2 rounded-md hover:bg-indigo-50"
-            >
-              Done
-            </button>
-          </div>
           <div className="p-4 border-b border-gray-200">
             <div className="flex items-center gap-1">
               <div className="relative flex-1 min-w-0">
@@ -2058,24 +2057,9 @@ export default function Workspace() {
         </aside>
 
         {/* Main Content */}
-        <main className="flex-1 flex flex-col overflow-hidden">
+        <main className="flex-1 flex flex-col overflow-hidden bg-gray-50 p-3 md:p-4 gap-3 md:gap-4">
           {/* Top Panel */}
-          <div className="p-3 md:p-4 border-b border-gray-200 bg-white">
-            {!mobileSidebarOpen && (
-              <div className="mb-3 md:hidden">
-                <button
-                  type="button"
-                  onClick={() => setMobileSidebarOpen(true)}
-                  className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2.5 text-sm font-medium text-indigo-900 hover:bg-indigo-100"
-                  aria-controls="workspace-lessons-sidebar"
-                >
-                  <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden>
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h10" />
-                  </svg>
-                  Open lessons & playlists
-                </button>
-              </div>
-            )}
+          <div className="w-full max-w-4xl mx-auto shrink-0 bg-white rounded-xl border border-gray-200 p-3 md:p-4">
             <div className="mb-3 md:mb-4 text-center">
               <h1 className="text-lg md:text-xl font-semibold text-gray-900 text-center line-clamp-2">
                 {selectedLesson?.title || 'Select a lesson'}
@@ -2277,47 +2261,6 @@ export default function Workspace() {
                 </div>
               </div>
               {selectedLesson?.youtube_url?.startsWith('text://') && (
-                <div className="relative group">
-                  <div className="bg-gray-900 text-white px-3 py-1.5 rounded-lg flex items-center gap-2 text-xs cursor-pointer">
-                    <span>Voice: {ttsVoiceName ? (ttsVoiceName.length > 18 ? ttsVoiceName.slice(0, 18) + '…' : ttsVoiceName) : 'Default'}</span>
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                    </svg>
-                  </div>
-                  <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg text-gray-900 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-10 min-w-[220px] max-h-[300px] overflow-y-auto">
-                    <button
-                      onClick={() => setTtsVoiceName('')}
-                      className={`w-full text-left px-4 py-2 text-xs text-gray-900 hover:bg-gray-100 ${!ttsVoiceName ? 'bg-gray-100 font-semibold' : ''
-                        }`}
-                    >
-                      Default
-                    </button>
-                    {availableVoices.map((v) => (
-                      <button
-                        key={v.name}
-                        onClick={() => setTtsVoiceName(v.name)}
-                        className={`w-full text-left px-4 py-2 text-xs text-gray-900 hover:bg-gray-100 ${ttsVoiceName === v.name ? 'bg-gray-100 font-semibold' : ''
-                          }`}
-                      >
-                        {v.name} <span className="text-gray-400 ml-1">({v.lang})</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-              <div
-                className={`px-3 py-1.5 rounded-lg flex items-center gap-2 text-xs cursor-pointer transition-colors ${soundOn ? 'bg-gray-900 text-white' : 'bg-gray-200 text-gray-600'
-                  }`}
-                onClick={() => {
-                  const next = !soundOn
-                  setSoundOn(next)
-                  localStorage.setItem('ear2finger-celebrate-sound', next ? 'on' : 'off')
-                }}
-                title="Play a chime when a sentence is fully correct"
-              >
-                <span>{soundOn ? '🔊' : '🔇'} Sound</span>
-              </div>
-              {selectedLesson?.youtube_url?.startsWith('text://') && (
                 <div
                   className={`px-3 py-1.5 rounded-lg flex items-center gap-2 text-xs cursor-pointer transition-colors ${ttsWordByWord
                     ? 'bg-blue-600 text-white'
@@ -2371,99 +2314,6 @@ export default function Workspace() {
                   Skip ⏭
                 </button>
               )}
-              <div className="relative group">
-                <div className="bg-gray-900 text-white px-3 py-1.5 rounded-lg flex items-center gap-2 text-xs cursor-pointer">
-                  <span>Repeat: {repeatCount === '∞' ? '∞' : repeatCount}</span>
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                  </svg>
-                </div>
-                <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg text-gray-900 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-10 min-w-[100px]">
-                  {([0, 1, 3, 5, 10, '∞'] as const).map((count) => (
-                    <button
-                      key={String(count)}
-                      onClick={() => setRepeatCount(count === '∞' ? '∞' : count)}
-                      className={`w-full text-left px-4 py-2 text-xs text-gray-900 hover:bg-gray-100 ${repeatCount === count ? 'bg-gray-100 font-semibold' : ''
-                        }`}
-                    >
-                      {count === '∞' ? '∞' : count}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="relative group">
-                <div className="bg-gray-900 text-white px-3 py-1.5 rounded-lg flex items-center gap-2 text-xs cursor-pointer">
-                  <span>Interval: {pauseInterval} sec</span>
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                  </svg>
-                </div>
-                <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg text-gray-900 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-10 min-w-[120px]">
-                  {[0, 3, 5, 10].map((sec) => (
-                    <button
-                      key={sec}
-                      type="button"
-                      onMouseDown={(e) => {
-                        e.preventDefault()
-                        setPauseInterval(sec)
-                      }}
-                      className={`w-full text-left px-4 py-2 text-xs text-gray-900 hover:bg-gray-100 ${pauseInterval === sec ? 'bg-gray-100 font-semibold' : ''
-                        }`}
-                    >
-                      {sec} sec
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="relative group">
-                <div className="bg-gray-900 text-white px-3 py-1.5 rounded-lg flex items-center gap-2 text-xs cursor-pointer">
-                  <span>Ignore punct.: {ignorePunctuation ? 'Yes' : 'No'}</span>
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                  </svg>
-                </div>
-                <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg text-gray-900 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-10 min-w-[100px]">
-                  <button
-                    onClick={() => setIgnorePunctuation(true)}
-                    className={`w-full text-left px-4 py-2 text-xs text-gray-900 hover:bg-gray-100 ${ignorePunctuation ? 'bg-gray-100 font-semibold' : ''
-                      }`}
-                  >
-                    Yes
-                  </button>
-                  <button
-                    onClick={() => setIgnorePunctuation(false)}
-                    className={`w-full text-left px-4 py-2 text-xs text-gray-900 hover:bg-gray-100 ${!ignorePunctuation ? 'bg-gray-100 font-semibold' : ''
-                      }`}
-                  >
-                    No
-                  </button>
-                </div>
-              </div>
-              <div className="relative group">
-                <div className="bg-gray-900 text-white px-3 py-1.5 rounded-lg flex items-center gap-2 text-xs cursor-pointer">
-                  <span>Ignore case: {ignoreCase ? 'Yes' : 'No'}</span>
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                  </svg>
-                </div>
-                <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg text-gray-900 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-10 min-w-[100px]">
-                  <button
-                    onClick={() => setIgnoreCase(true)}
-                    className={`w-full text-left px-4 py-2 text-xs text-gray-900 hover:bg-gray-100 ${ignoreCase ? 'bg-gray-100 font-semibold' : ''
-                      }`}
-                  >
-                    Yes
-                  </button>
-                  <button
-                    onClick={() => setIgnoreCase(false)}
-                    className={`w-full text-left px-4 py-2 text-xs text-gray-900 hover:bg-gray-100 ${!ignoreCase ? 'bg-gray-100 font-semibold' : ''
-                      }`}
-                  >
-                    No
-                  </button>
-                </div>
-              </div>
-
               <div className="flex flex-wrap items-center gap-2 w-full md:w-auto md:ml-auto justify-end">
                 <div className="flex items-center gap-1" title="Correct keystrokes in this video">
                   <div className="w-3 h-3 bg-green-500 rounded-full" />
@@ -2491,11 +2341,11 @@ export default function Workspace() {
           </div>
 
           {/* Text Input Panel - Per-word input */}
-          <div className="flex-1 p-3 md:p-4 overflow-y-auto bg-white min-h-0">
+          <div className="flex-1 w-full max-w-4xl mx-auto overflow-y-auto min-h-0 bg-white rounded-xl border border-gray-200 p-3 md:p-4">
             {currentSentence ? (() => {
               const words = currentSentence.sentence_text.split(/\s+/).filter(Boolean)
               return (
-                <div className="max-w-4xl mx-auto w-full min-w-0">
+                <div className="w-full min-w-0">
                   <div className="h-6 md:h-8 flex items-center mt-1 mb-0 md:mt-3 md:mb-1">
                     <p
                       className={`inline-flex items-center gap-1 text-lg md:text-xl font-semibold transition-opacity ${isCurrentSentenceFullyCorrect
@@ -2573,6 +2423,7 @@ export default function Workspace() {
                                   })
                                   setVideoSessionScores((s) => ({ ...s, incorrectChars: s.incorrectChars + 1 }))
                                   setLastInputFeedback({ wordIndex: idx, type: 'wrong' })
+                                  if (audio.errorEnabled) playMistakeBuzz(errorBuzzOptions)
                                 } else if (prevOk && nextOk) {
                                   setVideoSessionScores((s) => ({ ...s, correctChars: s.correctChars + 1 }))
                                   setLastInputFeedback({ wordIndex: idx, type: 'correct' })
@@ -2676,6 +2527,7 @@ export default function Workspace() {
                                   wordIndex: idx,
                                   type: isCorrectFirstChar ? 'correct' : 'wrong',
                                 })
+                                if (!isCorrectFirstChar && audio.errorEnabled) playMistakeBuzz(errorBuzzOptions)
                                 setWordHintIndex(null)
                                 setWordInputs((prev) => {
                                   const next = [...prev]

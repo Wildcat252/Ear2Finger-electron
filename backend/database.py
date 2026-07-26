@@ -97,6 +97,28 @@ class LearningProgress(Base):
     user = relationship("User", back_populates="learning_progress")
 
 
+class PracticeWordState(Base):
+    """Per-user state for words on the Practice page.
+
+    status='active'  -> shown (only meaningful for custom words)
+    status='binned'  -> hidden from the tricky list but recoverable (word bin)
+    status='deleted' -> permanently removed; never shown again
+
+    is_custom marks words the user added by hand, which must survive being
+    recovered from the bin (auto-derived tricky words just lose their row).
+    """
+
+    __tablename__ = "practice_word_states"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    word = Column(String, nullable=False, index=True)
+    status = Column(String, nullable=False, default="binned")
+    is_custom = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class PlaylistVideo(Base):
     __tablename__ = "playlist_videos"
 
@@ -178,6 +200,16 @@ def migrate_db():
                 with engine.begin() as conn:
                     conn.execute(text("ALTER TABLE users ADD COLUMN is_superuser BOOLEAN NOT NULL DEFAULT 0"))
                 print("Database migrated: Added is_superuser to users")
+
+        if 'practice_word_states' in table_names:
+            columns = inspector.get_columns('practice_word_states')
+            column_names = [col['name'] if isinstance(col, dict) else col.name for col in columns]
+            if 'is_custom' not in column_names:
+                with engine.begin() as conn:
+                    conn.execute(text(
+                        "ALTER TABLE practice_word_states ADD COLUMN is_custom BOOLEAN NOT NULL DEFAULT 0"
+                    ))
+                print("Database migrated: Added is_custom to practice_word_states")
 
         if 'playlists' in table_names:
             columns = inspector.get_columns('playlists')

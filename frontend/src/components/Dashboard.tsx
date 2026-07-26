@@ -6,7 +6,6 @@ import {
   getCoachRecommendations,
   type DailyUserStats,
   type UserStats,
-  type WordStat,
   type CoachFeedbackResponse,
   type PracticeRecommendationItem,
 } from '../api'
@@ -130,25 +129,6 @@ export default function Dashboard() {
     return days
   }, [stats])
 
-  const topIncorrect = useMemo<WordStat[]>(() => {
-    if (!stats?.top_incorrect_words) return []
-    return [...stats.top_incorrect_words]
-      .filter((w) => (w.latest_spell_retry_times ?? 1) > 1)
-      .sort((a, b) => (b.latest_spell_retry_times ?? 0) - (a.latest_spell_retry_times ?? 0))
-  }, [stats])
-
-  const [trickyPage, setTrickyPage] = useState(0)
-  const TRICKY_PAGE_SIZE = 30
-  const trickyPageCount = Math.max(1, Math.ceil((topIncorrect.length || 1) / TRICKY_PAGE_SIZE))
-  const trickyPageWords = useMemo(
-    () =>
-      topIncorrect.slice(
-        trickyPage * TRICKY_PAGE_SIZE,
-        trickyPage * TRICKY_PAGE_SIZE + TRICKY_PAGE_SIZE
-      ),
-    [topIncorrect, trickyPage]
-  )
-
   const maxDailySentences = useMemo(
     () => Math.max(1, ...recentDaily.map((d) => d.total_sentences_practiced || 0)),
     [recentDaily]
@@ -221,6 +201,15 @@ export default function Dashboard() {
                 c-1.854-0.088-3.711-0.135-5.574-0.089V94.252c0-0.73,0.594-1.323,1.323-1.323h323.702c0.73,0,1.323,0.594,1.323,1.323V273.234z"/>
             </svg>
             Workspace
+          </button>
+          <button
+            onClick={() => navigate('/practice')}
+            className="px-2 py-2 md:px-4 text-gray-600 hover:bg-gray-100 rounded-lg flex items-center gap-1.5 md:gap-2 text-sm md:text-base"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+            </svg>
+            Practice
           </button>
           <button className="px-2 py-2 md:px-4 bg-gray-900 text-white rounded-lg flex items-center gap-1.5 md:gap-2 text-sm md:text-base">
             <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 32 32">
@@ -486,82 +475,19 @@ export default function Dashboard() {
                 </div>
               </section>
 
-              {/* Top tricky words — compact list with retry counts and pagination */}
+              {/* Tricky words moved to the Practice page */}
               <section className="bg-white rounded-xl border border-gray-200 p-4">
-                <div className="flex items-center justify-between mb-1">
-                  <h2 className="flex-1 text-sm font-semibold text-gray-900 text-center">
-                    Top tricky words
-                  </h2>
-                  {topIncorrect.length > 0 && (
-                    <div className="flex items-center gap-2 text-[11px] text-gray-500">
-                      <button
-                        type="button"
-                        disabled={trickyPage === 0}
-                        onClick={() => setTrickyPage((p) => Math.max(0, p - 1))}
-                        className="px-1.5 py-0.5 rounded border border-gray-200 disabled:opacity-40"
-                      >
-                        ‹
-                      </button>
-                      <span>
-                        Page {trickyPage + 1} / {trickyPageCount}
-                      </span>
-                      <button
-                        type="button"
-                        disabled={trickyPage + 1 >= trickyPageCount}
-                        onClick={() =>
-                          setTrickyPage((p) => Math.min(trickyPageCount - 1, p + 1))
-                        }
-                        className="px-1.5 py-0.5 rounded border border-gray-200 disabled:opacity-40"
-                      >
-                        ›
-                      </button>
-                    </div>
-                  )}
-                </div>
-                <p className="text-xs text-gray-500 mb-4">
-                  Words where your most recent attempt required more than one try. Higher retry counts
-                  mean they are trickier for you right now.
+                <h2 className="text-sm font-semibold text-gray-900 mb-1">Tricky words</h2>
+                <p className="text-xs text-gray-500">
+                  Practice the words you keep misspelling on the{' '}
+                  <button
+                    type="button"
+                    onClick={() => navigate('/practice')}
+                    className="text-indigo-600 hover:text-indigo-800 hover:underline font-medium"
+                  >
+                    Practice page →
+                  </button>
                 </p>
-                {topIncorrect.length === 0 ? (
-                  <p className="text-xs text-gray-500">No word-level data yet.</p>
-                ) : (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                    {trickyPageWords.map((w) => {
-                      const rawRetry = w.latest_spell_retry_times ?? 0
-                      const retry = Math.max(1, Math.round(rawRetry))
-                      const displayWord = (w.word || '').replace(/^[^\w]+|[^\w]+$/g, '')
-                      const intensity =
-                        retry >= 9 ? 'bg-rose-900' :
-                        retry >= 8 ? 'bg-rose-800' :
-                        retry >= 7 ? 'bg-rose-700' :
-                        retry >= 6 ? 'bg-rose-600' :
-                        retry >= 5 ? 'bg-rose-500' :
-                        retry >= 4 ? 'bg-rose-400' :
-                        retry >= 3 ? 'bg-rose-300' :
-                        retry >= 2 ? 'bg-rose-200' :
-                        'bg-rose-100'
-                      return (
-                        <div
-                          key={w.word}
-                          className="flex items-center justify-between gap-2 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2"
-                        >
-                          <div className="text-xs font-mono text-gray-800 truncate">
-                            {displayWord || w.word}
-                          </div>
-                          <div className="flex items-center gap-1.5">
-                            <span
-                              className={`inline-block w-3 h-3 rounded-sm ${intensity}`}
-                              title={`${retry} tries`}
-                            />
-                            <span className="text-[11px] text-gray-600 tabular-nums">
-                              {retry}×
-                            </span>
-                          </div>
-                        </div>
-                      )
-                    })}
-                  </div>
-                )}
               </section>
             </>
           )}
