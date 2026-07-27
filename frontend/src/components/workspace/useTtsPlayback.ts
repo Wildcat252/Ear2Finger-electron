@@ -21,7 +21,7 @@ const MERGED_UTTERANCE_PADDING_MS = 180
 
 // Gap after a spoken punctuation name, and the gap kept before it when words
 // are grouped, so "Hello" and "comma" never run together.
-const PUNCT_GAP_MULTIPLIER = 0.4
+const PUNCT_GAP_MULTIPLIER = 0.2
 
 // Common punctuation spoken by name in word-by-word mode so the learner
 // knows to type it: "hello," is read as "hello" (word gap) "comma".

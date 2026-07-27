@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { AppHeader } from './AppHeader'
 import {
   getUserStats,
   getPracticeWordStates,
@@ -69,7 +69,6 @@ function savePracticeState(state: PersistedPracticeState): void {
 }
 
 export default function Practice() {
-  const navigate = useNavigate()
   const { ttsVoiceName, playbackSpeed, setPlaybackSpeed, ignoreCase, ignorePunctuation } = useWorkspace()
   const availableVoices = usePremiumVoices()
   const [audio] = useState(loadAudioSettings)
@@ -608,65 +607,10 @@ export default function Practice() {
   return (
     <div className="h-screen min-h-0 flex flex-col bg-white">
       {/* Header */}
-      <header className="bg-white border-b border-gray-200 px-3 py-2 md:px-4 md:py-3 flex flex-wrap items-center justify-between gap-y-2 gap-x-2 md:flex-nowrap md:gap-0">
-        <div className="flex items-center gap-2 order-1 shrink-0">
-          <img src="/icon.png" alt="Ear2Finger" className="w-8 h-8" />
-          <span className="text-lg font-semibold text-gray-900">Ear2Finger</span>
-          <button
-            type="button"
-            onClick={toggleSidebar}
-            title="Toggle sidebar"
-            aria-label="Toggle sidebar"
-            className="p-1.5 rounded-lg text-gray-500 hover:text-gray-900 hover:bg-gray-100"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24" aria-hidden>
-              <rect x="3" y="4" width="18" height="16" rx="2" />
-              <line x1="9" y1="4" x2="9" y2="20" />
-            </svg>
-          </button>
-        </div>
-
-        <nav className="order-3 basis-full flex flex-wrap items-center gap-1 md:order-2 md:basis-auto md:flex-nowrap">
-          <button
-            onClick={() => navigate('/workspace')}
-            className="px-2 py-2 md:px-4 text-gray-600 hover:bg-gray-100 rounded-lg flex items-center gap-1.5 md:gap-2 text-sm md:text-base"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-            </svg>
-            Workspace
-          </button>
-          <button className="px-2 py-2 md:px-4 bg-gray-900 text-white rounded-lg flex items-center gap-1.5 md:gap-2 text-sm md:text-base">
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-            </svg>
-            Practice
-          </button>
-          <button
-            onClick={() => navigate('/dashboard')}
-            className="px-2 py-2 md:px-4 text-gray-600 hover:bg-gray-100 rounded-lg flex items-center gap-1.5 md:gap-2 text-sm md:text-base"
-          >
-            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 32 32">
-              <polygon points="4 20 4 22 8.586 22 2 28.586 3.414 30 10 23.414 10 28 12 28 12 20 4 20" />
-              <rect x="24.0001" y="21" width="2" height="5" />
-              <rect x="20.0001" y="16" width="2" height="10" />
-              <rect x="16" y="18" width="2" height="8" />
-              <path d="M28,2H4A2.002,2.002,0,0,0,2,4V16H4V13H28.001l.001,15H16v2H28a2.0027,2.0027,0,0,0,2-2V4A2.0023,2.0023,0,0,0,28,2ZM12,11H4V4h8Zm2,0V4H28l.0007,7Z" />
-            </svg>
-            Dashboard
-          </button>
-          <button
-            onClick={() => navigate('/settings')}
-            className="px-2 py-2 md:px-4 text-gray-600 hover:bg-gray-100 rounded-lg flex items-center gap-1.5 md:gap-2 text-sm md:text-base"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-            </svg>
-            Settings
-          </button>
-        </nav>
-      </header>
+      <AppHeader
+        active="practice"
+        onToggleSidebar={toggleSidebar}
+      />
 
       <div className="flex-1 flex flex-col md:flex-row overflow-hidden min-h-0">
         {/* Sidebar: import more words */}

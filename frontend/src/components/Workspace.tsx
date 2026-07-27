@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { AppHeader } from './AppHeader'
 import {
   api,
   upsertCurrentLessonSession,
@@ -14,17 +14,14 @@ import { loadAudioSettings, playCelebrationChime } from '../audio'
 import { usePremiumVoices } from '../voices'
 import { useTtsPlayback } from './workspace/useTtsPlayback'
 import { useWorkspaceShortcuts } from './workspace/useWorkspaceShortcuts'
+import { useAudioPlayback } from './workspace/useAudioPlayback'
+import { useLessonData } from './workspace/useLessonData'
 import { CoachDrawer, type CoachDrawerHandle } from './workspace/CoachDrawer'
 import { WorkspaceSidebar } from './workspace/WorkspaceSidebar'
 import { DictationArea } from './workspace/DictationArea'
+import { PlayerPanel } from './workspace/PlayerPanel'
 import ImportModal from './ImportModal'
 import LessonHistory from './LessonHistory'
-
-interface Notification {
-  id: string
-  type: 'success' | 'error' | 'info'
-  message: string
-}
 
 const SPEED_OPTIONS = [0.2, 0.4, 0.6, 0.8, 1, 1.2]
 
@@ -42,37 +39,19 @@ const TRANSLATE_LANGUAGES = [
 ]
 
 export default function Workspace() {
-  const navigate = useNavigate()
   const ws = useWorkspace()
   const {
-    setPlaylists,
     selectedPlaylistId,
-    setSelectedPlaylistId,
     selectedLesson,
     setSelectedLesson,
-    setLessons,
     sentences,
-    setSentences,
     sentencesVideoId,
-    setSentencesVideoId,
     currentSentenceIndex,
     setCurrentSentenceIndex,
-    isPlaying,
     setIsPlaying,
-    currentTime,
     setCurrentTime,
-    playbackSpeed,
-    setPlaybackSpeed,
-    pauseInterval,
     ignorePunctuation,
     ignoreCase,
-    repeatCount,
-    ttsWordByWord,
-    setTtsWordByWord,
-    ttsWordInterval,
-    setTtsWordInterval,
-    ttsWordsPerGap,
-    setTtsWordsPerGap,
     wordInputs,
     wordHintUsed,
     wordErrorChars,
@@ -82,7 +61,7 @@ export default function Workspace() {
   } = ws
 
   const coachRef = useRef<CoachDrawerHandle | null>(null)
-  const audioRef = useRef<HTMLAudioElement>(null)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
   const intervalTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const isWaitingForPauseIntervalRef = useRef(false)
   const repeatCountRef = useRef(0)
@@ -120,8 +99,6 @@ export default function Workspace() {
   const sessionSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const [isImportModalOpen, setIsImportModalOpen] = useState(false)
-  const [isImportInProgress, setIsImportInProgress] = useState(false)
-  const [notifications, setNotifications] = useState<Notification[]>([])
   const [audioBlobUrl, setAudioBlobUrl] = useState<string | null>(null)
   const [translationVisible, setTranslationVisible] = useState(false)
   const [translationLoading, setTranslationLoading] = useState(false)
@@ -267,113 +244,15 @@ export default function Workspace() {
     }
   }, [selectedLesson?.video_id, selectedLesson?.audio_file_path])
 
-  const fetchPlaylists = async () => {
-    try {
-      const response = await api.get('/api/playlists')
-      setPlaylists(response.data)
-      if (response.data.length > 0 && !selectedPlaylistId) {
-        setSelectedPlaylistId(response.data[0].id)
-      } else if (response.data.length === 0) {
-        // Create default playlist if none exists
-        const defaultPlaylist = await api.post('/api/playlists', {
-          name: 'Default Playlist'
-        })
-        setPlaylists([defaultPlaylist.data])
-        setSelectedPlaylistId(defaultPlaylist.data.id)
-      }
-    } catch (err) {
-      console.error('Error fetching playlists:', err)
-    }
-  }
-
-  const fetchLessons = async () => {
-    if (!selectedPlaylistId) return
-
-    try {
-      const response = await api.get(`/api/playlists/${selectedPlaylistId}/videos`)
-      const videos = response.data.map((item: {
-        id: number
-        video_id: number
-        title?: string
-        duration?: number
-        sentence_count?: number
-        audio_file_path?: string
-        youtube_url?: string
-      }) => ({
-        id: item.id,
-        video_id: item.video_id,
-        title: item.title || 'Untitled Video',
-        duration: item.duration || 0,
-        sentence_count: item.sentence_count || 0,
-        audio_file_path: item.audio_file_path,
-        youtube_url: item.youtube_url,
-        is_favorite: false
-      }))
-      setLessons(videos)
-      if (videos.length > 0 && !selectedLesson) {
-        setSelectedLesson(videos[0])
-      }
-    } catch (err) {
-      console.error('Error fetching lessons:', err)
-    }
-  }
-
-  const pushNotification = (type: Notification['type'], message: string) => {
-    const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`
-    setNotifications((prev) => [...prev, { id, type, message }])
-    setTimeout(() => {
-      setNotifications((prev) => prev.filter((note) => note.id !== id))
-    }, 5000)
-  }
-
-
-  const runImportInBackground = async (payload: { playlistId: number; url?: string; title?: string; text?: string }) => {
-    setIsImportInProgress(true)
-    try {
-      let videoId: number
-      if (payload.url) {
-        const processResponse = await api.post('/api/youtube/process', {
-          url: payload.url
-        })
-        videoId = processResponse.data.video_id
-      } else {
-        const processResponse = await api.post('/api/youtube/process_text', {
-          title: payload.title,
-          text: payload.text
-        })
-        videoId = processResponse.data.video_id
-      }
-      await api.post(`/api/playlists/${payload.playlistId}/videos/${videoId}`)
-      pushNotification('success', 'Import complete. Lesson added to playlist.')
-      await fetchPlaylists()
-      if (selectedPlaylistId === payload.playlistId) {
-        await fetchLessons()
-      }
-    } catch (err: unknown) {
-      const message = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? null
-      pushNotification('error', message || 'Import failed. Please try again.')
-    } finally {
-      setIsImportInProgress(false)
-    }
-  }
-
-  const fetchSentences = async (videoId: number) => {
-    try {
-      const response = await api.get(`/api/youtube/videos/${videoId}/sentences`)
-      setSentences(response.data)
-      setSentencesVideoId(videoId)
-      return response.data as Array<{
-        id: number
-        sentence_text: string
-        start_time: number
-        end_time: number
-        sentence_index: number
-      }>
-    } catch (err) {
-      console.error('Error fetching sentences:', err)
-      return []
-    }
-  }
+  const {
+    notifications,
+    isImportInProgress,
+    pushNotification,
+    fetchPlaylists,
+    fetchLessons,
+    fetchSentences,
+    runImportInBackground,
+  } = useLessonData()
 
   const handleLessonSelect = async (lesson: Lesson) => {
     setLessonMenuOpen(null)
@@ -470,234 +349,19 @@ export default function Workspace() {
     }
   }
 
-  // Update audio playback speed when speed changes
-  useEffect(() => {
-    if (selectedLesson?.youtube_url?.startsWith('text://')) return
-    if (audioRef.current) {
-      audioRef.current.playbackRate = playbackSpeed
-    }
-  }, [playbackSpeed, selectedLesson])
-
-  // Handle time updates: keep progress bar (currentTime) in sync with audio playback
-  useEffect(() => {
-    if (selectedLesson?.youtube_url?.startsWith('text://')) return
-    const audio = audioRef.current
-    if (!audio || !sentences.length) return
-
-    const updateTime = () => {
-      const t = audio.currentTime
-      setCurrentTime(t)
-    }
-
-    audio.addEventListener('timeupdate', updateTime)
-    return () => audio.removeEventListener('timeupdate', updateTime)
-  }, [sentences, selectedLesson])
-
-  // Handle sentence-by-sentence playback
-  useEffect(() => {
-    if (selectedLesson?.youtube_url?.startsWith('text://')) return
-    const audio = audioRef.current
-    if (!audio || !sentences.length || !isPlaying) return
-
-    const currentSentence = sentences[currentSentenceIndex]
-    if (!currentSentence) return
-
-    const totalDuration = selectedLesson?.duration ?? 0
-
-    const checkSentenceEnd = () => {
-      if (!isPlaying) return
-
-      const nextSentence = sentences[currentSentenceIndex + 1]
-      const endTime = nextSentence
-        ? nextSentence.start_time
-        : totalDuration
-
-      if (!endTime || endTime <= 0) return
-
-      const hasReachedEnd = audio.currentTime >= endTime - 0.01
-      if (!hasReachedEnd) return
-
-      // When repeat is ∞, only advance when the user has spelled the current sentence fully correctly
-      const shouldRepeat =
-        repeatCount === '∞'
-          ? !isCurrentSentenceFullyCorrect
-          : (typeof repeatCount === 'number' && repeatCountRef.current <= repeatCount - 1)
-
-      if (pauseInterval > 0) {
-        // Simulate "click pause" at start: UI and audio show paused
-        isWaitingForPauseIntervalRef.current = true
-        if (intervalTimeoutRef.current) clearTimeout(intervalTimeoutRef.current)
-        intervalTimeoutRef.current = setTimeout(() => {
-          isWaitingForPauseIntervalRef.current = false
-          intervalTimeoutRef.current = null
-          const audioEl = audioRef.current
-          if (!audioEl) return
-          const playAfterSeek = (targetTime: number) => {
-            setCurrentTime(targetTime)
-            programmaticSeekRef.current = true
-            setIsPlaying(true)
-            const onSeeked = () => {
-              audioEl.removeEventListener('seeked', onSeeked)
-              clearTimeout(fallback)
-              audioEl.play().catch(() => { })
-            }
-            audioEl.addEventListener('seeked', onSeeked, { once: true })
-            audioEl.currentTime = targetTime
-            const fallback = setTimeout(() => {
-              if (audioEl.paused) {
-                audioEl.removeEventListener('seeked', onSeeked)
-                audioEl.play().catch(() => { })
-              }
-            }, 200)
-          }
-          if (shouldRepeat) {
-            repeatCountRef.current++
-            if (currentSentence) {
-              playAfterSeek(currentSentence.start_time)
-            } else {
-              setIsPlaying(true)
-            }
-          } else {
-            repeatCountRef.current = 0
-            if (currentSentenceIndex < sentences.length - 1) {
-              const nextIndex = currentSentenceIndex + 1
-              setCurrentSentenceIndex(nextIndex)
-              const ns = sentences[nextIndex]
-              if (ns) {
-                playAfterSeek(ns.start_time)
-                userInitiatedSentenceChangeRef.current = true
-              } else {
-                setIsPlaying(true)
-              }
-            } else {
-              setCurrentSentenceIndex(0)
-              audioEl.currentTime = 0
-              setCurrentTime(0)
-            }
-          }
-        }, pauseInterval * 1000)
-        setIsPlaying(false) // simulate "click pause"
-      } else {
-        if (shouldRepeat) {
-          repeatCountRef.current++
-          const audioEl = audioRef.current
-          if (audioEl && currentSentence) {
-            setCurrentTime(currentSentence.start_time)
-            programmaticSeekRef.current = true
-            const onSeeked = () => {
-              audioEl.removeEventListener('seeked', onSeeked)
-              audioEl.play().catch(() => { })
-            }
-            audioEl.addEventListener('seeked', onSeeked, { once: true })
-            audioEl.currentTime = currentSentence.start_time
-          }
-        } else {
-          repeatCountRef.current = 0
-          const audioEl = audioRef.current
-          if (!audioEl) return
-          if (currentSentenceIndex < sentences.length - 1) {
-            const nextIndex = currentSentenceIndex + 1
-            setCurrentSentenceIndex(nextIndex)
-            const ns = sentences[nextIndex]
-            if (ns) {
-              setCurrentTime(ns.start_time)
-              programmaticSeekRef.current = true
-              const onSeeked = () => {
-                audioEl.removeEventListener('seeked', onSeeked)
-                audioEl.play().catch(() => { })
-              }
-              audioEl.addEventListener('seeked', onSeeked, { once: true })
-              audioEl.currentTime = ns.start_time
-            }
-          } else {
-            setIsPlaying(false)
-            setCurrentSentenceIndex(0)
-            audioEl.pause()
-            audioEl.currentTime = 0
-          }
-        }
-      }
-    }
-
-    const intervalId = setInterval(checkSentenceEnd, 20) // Check more frequently for better accuracy
-    return () => {
-      clearInterval(intervalId)
-      if (intervalTimeoutRef.current && !isWaitingForPauseIntervalRef.current) {
-        clearTimeout(intervalTimeoutRef.current)
-        intervalTimeoutRef.current = null
-      }
-    }
-  }, [currentSentenceIndex, sentences, isPlaying, pauseInterval, repeatCount, selectedLesson?.duration, wordInputs, ignoreCase, ignorePunctuation])
-
-  // Keep audio progress in sync with current subtitle: seek to current sentence's start_time when subtitle changes.
-  useEffect(() => {
-    if (!audioRef.current || !sentences.length) return
-    const sentence = sentences[currentSentenceIndex]
-    if (!sentence) return
-    if (programmaticSeekRef.current) {
-      programmaticSeekRef.current = false
-      return
-    }
-    if (userInitiatedSentenceChangeRef.current) {
-      userInitiatedSentenceChangeRef.current = false
-      return
-    }
-    if (sentenceIndexFromPlaybackRef.current) {
-      sentenceIndexFromPlaybackRef.current = false
-      return
-    }
-    audioRef.current.currentTime = sentence.start_time
-    setCurrentTime(sentence.start_time)
-  }, [currentSentenceIndex, sentences])
-
-  // Reset to sentence 0 only when sentences actually change (e.g. new lesson). Do not reset on remount or Strict Mode double-invocation.
-  useEffect(() => {
-    if (sentences.length === 0) return
-    const identity = `${sentencesVideoId ?? ''}-${sentences.length}-${sentences[0]?.id ?? ''}`
-    if (prevSentencesIdentityRef.current === identity) return
-    const isNewSentences = prevSentencesIdentityRef.current !== null
-    prevSentencesIdentityRef.current = identity
-    if (skipNextSentenceResetRef.current) {
-      skipNextSentenceResetRef.current = false
-      return
-    }
-    if (isNewSentences && !isPlaying) {
-      setCurrentSentenceIndex(0)
-      repeatCountRef.current = 0
-      if (audioRef.current) {
-        audioRef.current.currentTime = sentences[0].start_time
-      }
-    }
-  }, [sentences, sentencesVideoId, isPlaying])
-
-  // Handle play/pause
-  useEffect(() => {
-    if (selectedLesson?.youtube_url?.startsWith('text://')) return
-    const audio = audioRef.current
-    if (!audio || !sentences.length) return
-
-    if (isPlaying) {
-      if (intervalTimeoutRef.current) {
-        clearTimeout(intervalTimeoutRef.current)
-        intervalTimeoutRef.current = null
-      }
-      isWaitingForPauseIntervalRef.current = false
-      if (programmaticSeekRef.current) {
-        programmaticSeekRef.current = false
-        audio.play()
-        return
-      }
-      const currentSentence = sentences[currentSentenceIndex]
-      if (currentSentence) {
-        if (currentSentenceIndex > 0 && audio.currentTime < currentSentence.start_time) {
-          audio.currentTime = currentSentence.start_time
-        }
-        audio.play()
-      }
-    } else {
-      audio.pause()
-    }
-  }, [isPlaying, currentSentenceIndex, sentences, selectedLesson])
+  // Audio-element playback for non-text lessons (rate, advance, seek, play/pause)
+  useAudioPlayback({
+    audioRef,
+    intervalTimeoutRef,
+    isWaitingForPauseIntervalRef,
+    repeatCountRef,
+    programmaticSeekRef,
+    userInitiatedSentenceChangeRef,
+    sentenceIndexFromPlaybackRef,
+    skipNextSentenceResetRef,
+    prevSentencesIdentityRef,
+    isCurrentSentenceFullyCorrectRef,
+  })
 
 
   const fetchTranslation = useCallback((lang: string) => {
@@ -743,12 +407,6 @@ export default function Workspace() {
   }, [translationVisible, fetchTranslation])
 
 
-  const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60)
-    const secs = Math.floor(seconds % 60)
-    return `${mins}:${secs.toString().padStart(2, '0')}`
-  }
-
   const normalizeWord = (w: string) => {
     let s = w
     if (ignoreCase) s = s.toLowerCase()
@@ -791,8 +449,6 @@ export default function Workspace() {
     setTranslationError(null)
   }, [currentSentenceIndex, selectedLesson?.id])
 
-  const totalDuration = selectedLesson?.duration || 0
-  const sentenceCount = sentences.length
 
   // Check if current sentence is fully correct (ignores punctuation-only tokens)
   const isCurrentSentenceFullyCorrect = currentSentence && (() => {
@@ -961,101 +617,11 @@ export default function Workspace() {
   return (
     <div className="h-screen min-h-0 flex flex-col bg-white">
       {/* Header */}
-      <header className="bg-white border-b border-gray-200 px-3 py-2 md:px-4 md:py-3 flex flex-wrap items-center justify-between gap-y-2 gap-x-2 md:flex-nowrap md:gap-0">
-        <div className="flex items-center gap-2 order-1 shrink-0">
-          <img src="/icon.png" alt="Ear2Finger" className="w-8 h-8" />
-          <span className="text-lg font-semibold text-gray-900">Ear2Finger</span>
-          <button
-            type="button"
-            onClick={toggleSidebar}
-            title="Toggle sidebar"
-            aria-label="Toggle sidebar"
-            aria-controls="workspace-lessons-sidebar"
-            className="p-1.5 rounded-lg text-gray-500 hover:text-gray-900 hover:bg-gray-100"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24" aria-hidden>
-              <rect x="3" y="4" width="18" height="16" rx="2" />
-              <line x1="9" y1="4" x2="9" y2="20" />
-            </svg>
-          </button>
-        </div>
-
-        <nav className="order-3 basis-full flex flex-wrap items-center gap-1 md:order-2 md:basis-auto md:flex-nowrap">
-          <button className="px-2 py-2 md:px-4 bg-gray-900 text-white rounded-lg flex items-center gap-1.5 md:gap-2 text-sm md:text-base">
-            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 511.999 511.999">
-              <path d="M480.276,62.526H156.574c-17.493,0-31.725,14.231-31.725,31.725v28.232l-30.679-30.68l-51.975,51.975l23.592,23.592
-                L0,270.705l66.804,104.419H41.579c-19.579,0-35.507,15.928-35.507,35.507v38.84h177.005v-38.84
-                c0-19.579-15.928-35.507-35.507-35.507h-44.674l-66.83-104.459l44.077-69.235c-1.482,21.531,5.967,43.567,22.39,59.99
-                l12.616,12.617l9.7-9.7v67.609c0,17.493,14.231,31.724,31.725,31.724h90.733l-5.361,55.401h-25.091v30.402h22.149h158.839h22.149
-                v-30.402h-25.091l-5.36-55.401h90.732c17.493,0,31.725-14.231,31.725-31.724V94.252C512,76.758,497.768,62.526,480.276,62.526z
-                 M147.569,405.526c2.815,0,5.105,2.29,5.105,5.105v8.439H36.474v-8.439c0-2.815,2.29-5.105,5.105-5.105H147.569z M105.999,148.902
-                c-0.277,0.245-0.556,0.485-0.83,0.735c-0.878,0.8-1.743,1.616-2.587,2.46c-0.016,0.016-0.032,0.03-0.049,0.046
-                s-0.03,0.032-0.046,0.049c-0.842,0.844-1.658,1.708-2.457,2.585c-0.253,0.278-0.498,0.561-0.746,0.842
-                c-0.353,0.398-0.714,0.79-1.058,1.196l-13.035-13.035l8.979-8.98l13.035,13.035C106.796,148.181,106.4,148.545,105.999,148.902z
-                 M116.365,229.831c-7.548-13.358-8.017-29.656-1.423-43.384c0.046-0.095,0.092-0.19,0.138-0.284
-                c0.231-0.473,0.471-0.943,0.719-1.411c0.066-0.125,0.135-0.248,0.203-0.372c0.239-0.441,0.484-0.88,0.74-1.313
-                c0.085-0.145,0.173-0.288,0.26-0.433c0.247-0.412,0.499-0.823,0.76-1.228c0.106-0.164,0.217-0.326,0.325-0.489
-                c0.252-0.382,0.507-0.763,0.772-1.138c0.135-0.19,0.277-0.378,0.414-0.566c0.25-0.344,0.5-0.687,0.76-1.026
-                c0.178-0.231,0.365-0.456,0.548-0.684c0.233-0.291,0.462-0.584,0.703-0.87c0.254-0.303,0.52-0.597,0.783-0.894
-                c0.183-0.207,0.361-0.418,0.548-0.622c0.46-0.502,0.931-0.994,1.415-1.478c0.539-0.539,1.09-1.06,1.65-1.568
-                c0.161-0.147,0.327-0.286,0.49-0.431c0.408-0.361,0.82-0.719,1.238-1.062c0.18-0.149,0.365-0.292,0.547-0.438
-                c0.418-0.333,0.838-0.662,1.265-0.979c0.173-0.13,0.349-0.256,0.525-0.383c0.455-0.329,0.915-0.65,1.379-0.961
-                c0.149-0.1,0.298-0.2,0.449-0.298c0.52-0.339,1.046-0.667,1.576-0.984c0.099-0.06,0.198-0.121,0.297-0.179
-                c3.916-2.297,8.095-3.977,12.398-5.042c0.069-0.017,0.138-0.036,0.207-0.054c0.676-0.164,1.356-0.311,2.038-0.445
-                c0.057-0.011,0.113-0.024,0.171-0.036c0.696-0.134,1.394-0.25,2.095-0.353c0.041-0.006,0.082-0.013,0.123-0.019
-                c0.708-0.101,1.42-0.186,2.131-0.255c0.035-0.003,0.07-0.007,0.105-0.011c0.709-0.067,1.419-0.118,2.13-0.152
-                c0.044-0.002,0.086-0.005,0.13-0.007c0.692-0.032,1.385-0.048,2.078-0.05c0.064,0,0.128-0.001,0.193-0.001
-                c1.958,0.003,3.915,0.127,5.86,0.372c0.043,0.005,0.085,0.013,0.128,0.018c0.845,0.109,1.687,0.248,2.526,0.403
-                c0.246,0.046,0.492,0.095,0.738,0.145c0.649,0.131,1.294,0.279,1.938,0.437c0.285,0.071,0.572,0.136,0.855,0.212
-                c0.764,0.204,1.524,0.428,2.28,0.67c0.395,0.128,0.786,0.269,1.179,0.407c0.497,0.174,0.992,0.351,1.484,0.542
-                c0.428,0.167,0.852,0.345,1.276,0.524c0.394,0.167,0.785,0.341,1.176,0.518c0.435,0.199,0.87,0.397,1.298,0.61
-                c0.41,0.203,0.815,0.421,1.22,0.636c0.341,0.181,0.685,0.354,1.021,0.543l-31.927,31.927L116.365,229.831z M272.491,419.07
-                l5.361-55.401h81.147l5.36,55.401H272.491z M481.598,331.945c0,0.729-0.594,1.323-1.323,1.323h-93.674H250.249h-93.675
-                c-0.73,0-1.323-0.593-1.323-1.323v-28.309h326.348V331.945z M481.598,273.234H155.251v-39.3l69.176-69.176l-12.617-12.616
-                c-7.677-7.677-16.585-13.387-26.091-17.152c-0.082-0.032-0.165-0.061-0.248-0.093c-1.079-0.424-2.166-0.826-3.26-1.199
-                c-0.32-0.109-0.646-0.206-0.967-0.311c-0.85-0.278-1.701-0.55-2.56-0.798c-0.547-0.158-1.099-0.298-1.649-0.444
-                c-0.63-0.166-1.26-0.337-1.893-0.487c-0.749-0.179-1.502-0.335-2.256-0.493c-0.434-0.089-0.865-0.184-1.3-0.266
-                c-0.918-0.174-1.841-0.324-2.767-0.466c-0.269-0.041-0.535-0.085-0.804-0.123c-1.053-0.15-2.11-0.274-3.17-0.379
-                c-0.14-0.014-0.279-0.029-0.418-0.043c-1.154-0.109-2.312-0.191-3.472-0.248c-0.045-0.002-0.089-0.005-0.134-0.007
-                c-1.854-0.088-3.711-0.135-5.574-0.089V94.252c0-0.73,0.594-1.323,1.323-1.323h323.702c0.73,0,1.323,0.594,1.323,1.323V273.234z"/>
-            </svg>
-            Workspace
-          </button>
-          <button
-            onClick={() => navigate('/practice')}
-            className="px-2 py-2 md:px-4 text-gray-600 hover:bg-gray-100 rounded-lg flex items-center gap-1.5 md:gap-2 text-sm md:text-base"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-            </svg>
-            Practice
-          </button>
-          <button
-            onClick={() => navigate('/dashboard')}
-            className="px-2 py-2 md:px-4 text-gray-600 hover:bg-gray-100 rounded-lg flex items-center gap-1.5 md:gap-2 text-sm md:text-base"
-          >
-            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 32 32">
-              <polygon points="4 20 4 22 8.586 22 2 28.586 3.414 30 10 23.414 10 28 12 28 12 20 4 20" />
-              <rect x="24.0001" y="21" width="2" height="5" />
-              <rect x="20.0001" y="16" width="2" height="10" />
-              <rect x="16" y="18" width="2" height="8" />
-              <path d="M28,2H4A2.002,2.002,0,0,0,2,4V16H4V13H28.001l.001,15H16v2H28a2.0027,2.0027,0,0,0,2-2V4A2.0023,2.0023,0,0,0,28,2ZM12,11H4V4h8Zm2,0V4H28l.0007,7Z" />
-            </svg>
-            Dashboard
-          </button>
-          <button
-            onClick={() => navigate('/settings')}
-            className="px-2 py-2 md:px-4 text-gray-600 hover:bg-gray-100 rounded-lg flex items-center gap-1.5 md:gap-2 text-sm md:text-base"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-            </svg>
-            Settings
-          </button>
-        </nav>
-
-      </header>
+      <AppHeader
+        active="workspace"
+        onToggleSidebar={toggleSidebar}
+        sidebarControlsId="workspace-lessons-sidebar"
+      />
 
       <div className="flex-1 flex flex-col md:flex-row overflow-hidden min-h-0">
 
@@ -1071,315 +637,22 @@ export default function Workspace() {
 
         {/* Main Content */}
         <main className="flex-1 flex flex-col overflow-hidden bg-gray-50 p-3 md:p-4 gap-3 md:gap-4">
-          {/* Top Panel */}
-          <div className="w-full max-w-4xl mx-auto shrink-0 bg-white rounded-xl border border-gray-200 p-3 md:p-4">
-            <div className="mb-3 md:mb-4 text-center">
-              <h1 className="text-lg md:text-xl font-semibold text-gray-900 text-center line-clamp-2">
-                {selectedLesson?.title || 'Select a lesson'}
-              </h1>
-            </div>
-
-            {/* Audio Element (hidden) */}
-            {selectedLesson && (
-              <audio
-                ref={audioRef}
-                src={audioBlobUrl ?? undefined}
-                onLoadedMetadata={() => {
-                  if (audioRef.current != null && currentTime >= 0) {
-                    audioRef.current.currentTime = currentTime
-                  }
-                }}
-                onEnded={() => {
-                  setIsPlaying(false)
-                }}
-                onError={(e) => {
-                  console.error('Audio playback error:', e)
-                  setIsPlaying(false)
-                }}
-              />
-            )}
-
-            <div className="flex flex-col gap-3 md:flex-row md:items-center md:gap-4 mb-3 md:mb-4">
-              {/* Media Player */}
-              <div className="flex-1 flex items-center gap-2 min-w-0 w-full">
-                <button
-                  onClick={() => {
-                    if (currentSentenceIndex > 0) {
-                      userInitiatedSentenceChangeRef.current = true
-                      const prevIndex = currentSentenceIndex - 1
-                      setCurrentSentenceIndex(prevIndex)
-                      repeatCountRef.current = 0
-                      resetTtsWordQueue()
-                      if (selectedLesson?.youtube_url?.startsWith('text://')) {
-                        setCurrentTime(sentences[prevIndex].start_time)
-                      } else if (audioRef.current && sentences[prevIndex]) {
-                        audioRef.current.currentTime = sentences[prevIndex].start_time
-                        setCurrentTime(sentences[prevIndex].start_time)
-                      }
-                    }
-                  }}
-                  disabled={currentSentenceIndex === 0}
-                  className="p-2 hover:bg-gray-100 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <svg className="w-5 h-5 text-gray-600" fill="currentColor" viewBox="0 0 20 20">
-                    <path d="M8.445 14.832A1 1 0 0010 14v-2.798l5.445 3.63A1 1 0 0017 14V6a1 1 0 00-1.555-.832L10 8.798V6a1 1 0 00-1.555-.832l-6 4a1 1 0 000 1.664l6 4z" />
-                  </svg>
-                </button>
-                <button
-                  onClick={() => {
-                    if (!selectedLesson || !sentences.length) return
-                    setIsPlaying(!isPlaying)
-                    // When the user hits Play, move the cursor to the first input-able word (skip punctuation-only tokens).
-                    if (currentSentence) {
-                      const words = currentSentence.sentence_text.split(/\s+/).filter(Boolean)
-                      const firstInputIndex = words.findIndex((w) => !isPunctuationOnlyToken(w))
-                      if (firstInputIndex >= 0) {
-                        wordInputRefs.current[firstInputIndex]?.focus()
-                      }
-                    }
-                  }}
-                  disabled={!selectedLesson || !sentences.length}
-                  className="p-2 hover:bg-gray-100 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {isPlaying ? (
-                    <svg className="w-5 h-5 text-gray-600" fill="currentColor" viewBox="0 0 20 20">
-                      <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zM7 8a1 1 0 012 0v4a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v4a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
-                    </svg>
-                  ) : (
-                    <svg className="w-5 h-5 text-gray-600" fill="currentColor" viewBox="0 0 20 20">
-                      <path d="M6.3 2.841A1.5 1.5 0 004 4.11V15.89a1.5 1.5 0 002.3 1.269l9.344-5.89a1.5 1.5 0 000-2.538L6.3 2.84z" />
-                    </svg>
-                  )}
-                </button>
-                <button
-                  onClick={() => {
-                    if (!selectedLesson || !sentences.length || !currentSentence) return
-                    // Reset word queue so TTS restarts from word 0
-                    resetTtsWordQueue()
-                    repeatCountRef.current = 0
-                    if (selectedLesson.youtube_url?.startsWith('text://')) {
-                      // Cancel current speech, then re-trigger by toggling isPlaying
-                      window.speechSynthesis.cancel()
-                      setIsPlaying(false)
-                      setTimeout(() => setIsPlaying(true), 10)
-                    } else if (audioRef.current) {
-                      audioRef.current.currentTime = currentSentence.start_time
-                      setCurrentTime(currentSentence.start_time)
-                      programmaticSeekRef.current = true
-                      audioRef.current.play().catch(() => { })
-                      setIsPlaying(true)
-                    }
-                  }}
-                  disabled={!selectedLesson || !sentences.length}
-                  className="p-2 hover:bg-gray-100 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
-                  title="Replay current sentence"
-                >
-                  <svg className="w-5 h-5 text-gray-600" fill="currentColor" viewBox="0 0 20 20">
-                    <path fillRule="evenodd" d="M15.312 11.424a5.5 5.5 0 01-9.201 2.466l-.312-.311V15a.75.75 0 01-1.5 0v-3.5a.75.75 0 01.75-.75H8.5a.75.75 0 010 1.5H7.058l.162.162a4 4 0 006.693-1.793.75.75 0 011.399.555zM4.688 8.576a5.5 5.5 0 019.201-2.466l.312.311V5a.75.75 0 011.5 0v3.5a.75.75 0 01-.75.75H11.5a.75.75 0 010-1.5h1.442l-.162-.162a4 4 0 00-6.693 1.793.75.75 0 11-1.399-.555z" clipRule="evenodd" />
-                  </svg>
-                </button>
-                <button
-                  onClick={() => {
-                    if (currentSentenceIndex >= sentences.length - 1) return
-                    const nextIndex = currentSentenceIndex + 1
-                    const nextSentence = sentences[nextIndex]
-                    if (!nextSentence) return
-                    userInitiatedSentenceChangeRef.current = true
-                    // Cancel any pause-interval timeout so it doesn't fire after we skip
-                    if (intervalTimeoutRef.current) {
-                      clearTimeout(intervalTimeoutRef.current)
-                      intervalTimeoutRef.current = null
-                    }
-                    isWaitingForPauseIntervalRef.current = false
-                    repeatCountRef.current = 0
-                    resetTtsWordQueue()
-                    setCurrentSentenceIndex(nextIndex)
-                    setCurrentTime(nextSentence.start_time)
-                    if (selectedLesson?.youtube_url?.startsWith('text://')) {
-                      setCurrentTime(nextSentence.start_time)
-                    } else if (audioRef.current) {
-                      audioRef.current.currentTime = nextSentence.start_time
-                      audioRef.current.play().catch(() => { })
-                    }
-                    setIsPlaying(true)
-                  }}
-                  disabled={currentSentenceIndex >= sentences.length - 1}
-                  className="p-2 hover:bg-gray-100 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <svg className="w-5 h-5 text-gray-600" fill="currentColor" viewBox="0 0 20 20">
-                    <path d="M4.555 5.168A1 1 0 003 6v8a1 1 0 001.555.832L10 11.202V14a1 1 0 001.555.832l6-4a1 1 0 000-1.664l-6-4A1 1 0 0011 6v2.798l-5.445-3.63z" />
-                  </svg>
-                </button>
-                <div className="flex-1 flex items-center gap-2 min-w-0">
-                  <div
-                    className="flex-1 min-w-0 h-2 rounded-full overflow-hidden relative pointer-events-none"
-                    aria-hidden
-                  >
-                    <div className="absolute inset-0 bg-gray-200 rounded-full" />
-                    <div
-                      className="absolute inset-y-0 left-0 bg-indigo-600 rounded-full origin-left"
-                      style={{
-                        width: `${selectedLesson?.youtube_url?.startsWith('text://')
-                          ? sentences.length > 0
-                            ? Math.min(100, ((currentSentenceIndex + 1) / sentences.length) * 100)
-                            : 0
-                          : totalDuration > 0
-                            ? Math.min(100, (currentTime / totalDuration) * 100)
-                            : 0
-                          }%`,
-                        transition: 'width 0.2s linear'
-                      }}
-                    />
-                  </div>
-                  <span className="text-sm text-gray-600 min-w-[3rem]">
-                    {selectedLesson?.youtube_url?.startsWith('text://') ? (
-                      <span className="text-gray-500 bg-gray-200 text-xs rounded-full px-2 py-1">
-                        Sentence {currentSentenceIndex + 1} / {sentences.length}
-                      </span>
-                    ) : (
-                      <>
-                        {formatTime(currentTime)} / {formatTime(totalDuration)}
-                        {sentenceCount > 0 && (
-                          <span className="ml-2 text-gray-500 bg-gray-200 text-xs rounded-full px-2 py-1">
-                            {currentSentenceIndex + 1} / {sentenceCount}
-                          </span>
-                        )}
-                      </>
-                    )}
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* Controls */}
-            <div className="flex flex-wrap items-center gap-2 md:gap-3">
-              <div className="relative group">
-                <div className="bg-gray-900 text-white px-3 py-1.5 rounded-lg flex items-center gap-2 text-xs cursor-pointer">
-                  <span>Speed: {playbackSpeed}x</span>
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                  </svg>
-                </div>
-                <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg text-gray-900 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-10 min-w-[120px]">
-                  {SPEED_OPTIONS.map((speed) => (
-                    <button
-                      key={speed}
-                      onClick={() => setPlaybackSpeed(speed)}
-                      className={`w-full text-left px-4 py-2 text-xs text-gray-900 hover:bg-gray-100 ${playbackSpeed === speed ? 'bg-gray-100 font-semibold' : ''
-                        }`}
-                    >
-                      {speed}x
-                    </button>
-                  ))}
-                </div>
-              </div>
-              {selectedLesson?.youtube_url?.startsWith('text://') && (
-                <div
-                  className={`px-3 py-1.5 rounded-lg flex items-center gap-2 text-xs cursor-pointer transition-colors ${ttsWordByWord
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-900 text-white'
-                    }`}
-                  onClick={() => {
-                    // Reset word queue before toggling so the effect re-enters cleanly
-                    resetTtsWordQueue()
-                    setTtsWordByWord(!ttsWordByWord)
-                  }}
-                >
-                  <span>Word-by-Word: {ttsWordByWord ? 'ON' : 'OFF'}</span>
-                </div>
-              )}
-              {selectedLesson?.youtube_url?.startsWith('text://') && ttsWordByWord && (
-                <div className="bg-gray-900 text-white px-3 py-1.5 rounded-lg flex items-center gap-1.5 text-xs">
-                  <span>Word Gap:</span>
-                  <input
-                    key={ttsWordInterval}
-                    type="number"
-                    defaultValue={ttsWordInterval}
-                    min={0}
-                    max={10}
-                    step={0.05}
-                    title="Seconds between spoken words (0–10)"
-                    onKeyDown={(e) => {
-                      // Keep keystrokes local so global shortcuts (-, =, Enter…) don't fire
-                      e.stopPropagation()
-                      if (e.key === 'Enter') e.currentTarget.blur()
-                    }}
-                    onBlur={(e) => {
-                      const v = parseFloat(e.currentTarget.value)
-                      if (Number.isFinite(v)) {
-                        setTtsWordInterval(Math.min(10, Math.max(0, v)))
-                      } else {
-                        e.currentTarget.value = String(ttsWordInterval)
-                      }
-                    }}
-                    className="w-14 bg-gray-800 border border-gray-700 rounded px-1.5 py-0.5 text-xs text-white text-right focus:outline-none focus:border-gray-500"
-                  />
-                  <span>s</span>
-                </div>
-              )}
-              {selectedLesson?.youtube_url?.startsWith('text://') && ttsWordByWord && (
-                <div className="bg-gray-900 text-white px-3 py-1.5 rounded-lg flex items-center gap-1.5 text-xs">
-                  <span>Words/Gap:</span>
-                  <input
-                    key={ttsWordsPerGap}
-                    type="number"
-                    defaultValue={ttsWordsPerGap}
-                    min={1}
-                    max={20}
-                    step={1}
-                    title="Speak this many words before pausing (1–20). The pause adds up their gaps."
-                    onKeyDown={(e) => {
-                      // Keep keystrokes local so global shortcuts (-, =, Enter…) don't fire
-                      e.stopPropagation()
-                      if (e.key === 'Enter') e.currentTarget.blur()
-                    }}
-                    onBlur={(e) => {
-                      const v = parseInt(e.currentTarget.value, 10)
-                      if (Number.isFinite(v)) {
-                        setTtsWordsPerGap(Math.min(20, Math.max(1, v)))
-                      } else {
-                        e.currentTarget.value = String(ttsWordsPerGap)
-                      }
-                    }}
-                    className="w-12 bg-gray-800 border border-gray-700 rounded px-1.5 py-0.5 text-xs text-white text-right focus:outline-none focus:border-gray-500"
-                  />
-                </div>
-              )}
-              {selectedLesson?.youtube_url?.startsWith('text://') && ttsWordByWord && (
-                <button
-                  type="button"
-                  onClick={() => ttsSkipWord()}
-                  title={`Skip the current word and jump to the next one (${displayKey(keybinds.skipWord)})`}
-                  className="bg-gray-900 text-white px-3 py-1.5 rounded-lg text-xs cursor-pointer hover:bg-gray-800 transition-colors"
-                >
-                  Skip ⏭
-                </button>
-              )}
-              <div className="flex flex-wrap items-center gap-2 w-full md:w-auto md:ml-auto justify-end">
-                <div className="flex items-center gap-1" title="Correct keystrokes in this video">
-                  <div className="w-3 h-3 bg-green-500 rounded-full" />
-                  <span className="text-sm text-gray-700">{videoSessionScores.correctChars}</span>
-                </div>
-                <div className="flex items-center gap-1" title="Hints used in this video">
-                  <div className="w-3 h-3 bg-yellow-500 rounded-full" />
-                  <span className="text-sm text-gray-700">{videoSessionScores.hintCount}</span>
-                </div>
-                <div className="flex items-center gap-1" title="Incorrect keystrokes in this video">
-                  <div className="w-3 h-3 bg-red-500 rounded-full" />
-                  <span className="text-sm text-gray-700">{videoSessionScores.incorrectChars}</span>
-                </div>
-                {selectedLesson && (
-                  <button
-                    type="button"
-                    onClick={() => coachRef.current?.openForVideo(selectedLesson.video_id)}
-                    className="ml-4 inline-flex items-center rounded-full border border-indigo-200 bg-white px-3 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-50 hover:border-indigo-300"
-                  >
-                    Ask coach
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
+          <PlayerPanel
+            audioRef={audioRef}
+            audioBlobUrl={audioBlobUrl}
+            currentSentence={currentSentence}
+            intervalTimeoutRef={intervalTimeoutRef}
+            isWaitingForPauseIntervalRef={isWaitingForPauseIntervalRef}
+            repeatCountRef={repeatCountRef}
+            userInitiatedSentenceChangeRef={userInitiatedSentenceChangeRef}
+            programmaticSeekRef={programmaticSeekRef}
+            wordInputRefs={wordInputRefs}
+            resetTtsWordQueue={resetTtsWordQueue}
+            ttsSkipWord={ttsSkipWord}
+            isPunctuationOnlyToken={isPunctuationOnlyToken}
+            keybinds={keybinds}
+            onAskCoach={(videoId) => coachRef.current?.openForVideo(videoId)}
+          />
 
           <DictationArea
             currentSentence={currentSentence}
