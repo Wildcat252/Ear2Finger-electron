@@ -47,6 +47,15 @@ function wordGapMultiplier(word: string): number {
 
 // Common punctuation spoken by name in word-by-word mode so the learner
 // knows to type it: "hello," is read as "hello" (word gap) "comma".
+// Each standalone utterance carries trailing padding the engine drops when
+// words are merged into one phrase (measured ~180ms at rate 1). Used to keep
+// grouped word-by-word playback the same length as ungrouped.
+const MERGED_UTTERANCE_PADDING_MS = 180
+
+// Gap after a spoken punctuation name, and the gap kept before it when words
+// are grouped, so "Hello" and "comma" never run together.
+const PUNCT_GAP_MULTIPLIER = 0.4
+
 const SPOKEN_PUNCTUATION: Record<string, string> = {
   ',': 'comma',
   '.': 'period',
@@ -100,6 +109,8 @@ export default function Workspace() {
     setTtsWordByWord,
     ttsWordInterval,
     setTtsWordInterval,
+    ttsWordsPerGap,
+    setTtsWordsPerGap,
     wordInputs,
     setWordInputs,
     wordHintIndex,
@@ -1286,7 +1297,13 @@ export default function Workspace() {
       // word from its spoken punctuation: "Hello," -> "Hello" (gap) "comma" (gap).
       // Punctuation-name segments use half the base gap (typing them is one
       // keystroke); word segments keep the length-scaled gap.
-      type TtsSegment = { text: string; gapMultiplier: number; tokenIdx: number; lastOfToken: boolean }
+      type TtsSegment = {
+        text: string
+        gapMultiplier: number
+        tokenIdx: number
+        lastOfToken: boolean
+        isPunct: boolean
+      }
       const segments: TtsSegment[] = []
       words.forEach((token, tokenIdx) => {
         const wordPart = token.replace(/[,.?!]/g, '').trim()
@@ -1297,18 +1314,79 @@ export default function Workspace() {
             gapMultiplier: wordGapMultiplier(wordPart),
             tokenIdx,
             lastOfToken: punctNames.length === 0,
+            isPunct: false,
           })
         }
         punctNames.forEach((name, i) => {
           segments.push({
             text: name,
-            gapMultiplier: 0.4,
+            gapMultiplier: PUNCT_GAP_MULTIPLIER,
             tokenIdx,
             lastOfToken: i === punctNames.length - 1,
+            isPunct: true,
           })
         })
       })
       if (segments.length === 0) { onSentenceFinished(); return }
+
+      // Group N words into one phrase. The group is merged into a SINGLE
+      // utterance so it is spoken naturally ("how are you"), not as separate
+      // words with the engine's boundary between them. The pause that follows
+      // accumulates every gap the group's words would each have earned.
+      const groupSize = Math.max(1, Math.floor(ttsWordsPerGap || 1))
+      if (groupSize > 1) {
+        // Group by token, not segment, so a word and its punctuation stay together
+        const groupOf = (tokenIdx: number) => Math.floor(tokenIdx / groupSize)
+        const out: TtsSegment[] = []
+        let i = 0
+        while (i < segments.length) {
+          const g = groupOf(segments[i].tokenIdx)
+          const groupSegs: TtsSegment[] = []
+          while (i < segments.length && groupOf(segments[i].tokenIdx) === g) {
+            groupSegs.push(segments[i])
+            i++
+          }
+          const totalGap = groupSegs.reduce((sum, s) => sum + s.gapMultiplier, 0)
+
+          // Merge consecutive words into one phrase, but leave each punctuation
+          // name standalone so it stays audibly separated from the words.
+          const pieces: TtsSegment[] = []
+          for (const seg of groupSegs) {
+            const last = pieces[pieces.length - 1]
+            if (!seg.isPunct && last && !last.isPunct) {
+              last.text += ` ${seg.text}`
+              // Track the furthest token so resume/skip continue after the run
+              last.tokenIdx = seg.tokenIdx
+            } else {
+              pieces.push({ ...seg, lastOfToken: true })
+            }
+          }
+
+          // Merging speaks faster than one word at a time because each utterance
+          // carries its own trailing padding — hand that time back so a group
+          // lasts as long as N=1 would.
+          let extra = 0
+          if (ttsWordInterval > 0) {
+            const lostMs =
+              ((groupSegs.length - pieces.length) * MERGED_UTTERANCE_PADDING_MS) /
+              Math.max(0.1, playbackSpeed)
+            extra = lostMs / (ttsWordInterval * 1500)
+          }
+
+          // Keep a small gap at each internal (punctuation) boundary; the rest
+          // of the group's accumulated time lands after the final piece.
+          const internal = Math.max(0, pieces.length - 1) * PUNCT_GAP_MULTIPLIER
+          pieces.forEach((piece, idx) => {
+            piece.gapMultiplier =
+              idx < pieces.length - 1
+                ? PUNCT_GAP_MULTIPLIER
+                : Math.max(0, totalGap + extra - internal)
+          })
+          out.push(...pieces)
+        }
+        segments.length = 0
+        segments.push(...out)
+      }
 
       // Utterances abandoned by Skip: their late onend must not schedule anything
       const abandonedUtterances = new WeakSet<SpeechSynthesisUtterance>()
@@ -1337,7 +1415,7 @@ export default function Workspace() {
             wordQueueTimeoutRef.current = setTimeout(() => {
               wordQueueTimeoutRef.current = null
               speakSegment(segIdx + 1)
-            }, ttsWordInterval * 1000 * segment.gapMultiplier)
+            }, ttsWordInterval * 1500 * segment.gapMultiplier)
           } else {
             onSentenceFinished()
           }
@@ -1440,6 +1518,7 @@ export default function Workspace() {
     availableVoices,
     ttsWordByWord,
     ttsWordInterval,
+    ttsWordsPerGap,
   ])
 
   // Auto-save lesson session when at least one sentence has been completed.
@@ -2302,6 +2381,34 @@ export default function Workspace() {
                     className="w-14 bg-gray-800 border border-gray-700 rounded px-1.5 py-0.5 text-xs text-white text-right focus:outline-none focus:border-gray-500"
                   />
                   <span>s</span>
+                </div>
+              )}
+              {selectedLesson?.youtube_url?.startsWith('text://') && ttsWordByWord && (
+                <div className="bg-gray-900 text-white px-3 py-1.5 rounded-lg flex items-center gap-1.5 text-xs">
+                  <span>Words/Gap:</span>
+                  <input
+                    key={ttsWordsPerGap}
+                    type="number"
+                    defaultValue={ttsWordsPerGap}
+                    min={1}
+                    max={20}
+                    step={1}
+                    title="Speak this many words before pausing (1–20). The pause adds up their gaps."
+                    onKeyDown={(e) => {
+                      // Keep keystrokes local so global shortcuts (-, =, Enter…) don't fire
+                      e.stopPropagation()
+                      if (e.key === 'Enter') e.currentTarget.blur()
+                    }}
+                    onBlur={(e) => {
+                      const v = parseInt(e.currentTarget.value, 10)
+                      if (Number.isFinite(v)) {
+                        setTtsWordsPerGap(Math.min(20, Math.max(1, v)))
+                      } else {
+                        e.currentTarget.value = String(ttsWordsPerGap)
+                      }
+                    }}
+                    className="w-12 bg-gray-800 border border-gray-700 rounded px-1.5 py-0.5 text-xs text-white text-right focus:outline-none focus:border-gray-500"
+                  />
                 </div>
               )}
               {selectedLesson?.youtube_url?.startsWith('text://') && ttsWordByWord && (

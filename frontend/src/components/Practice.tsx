@@ -183,21 +183,20 @@ export default function Practice() {
 
   const isCorrect = Boolean(target) && normalizeWord(value) === normalizeWord(target)
 
-  /** Speak text without clipping its start (silent primer + deferred speak). */
-  const speak = useCallback(
-    (text: string) => {
-      if (!text) return
+  /**
+   * Speak one or more parts back-to-back without clipping the start
+   * (silent primer + deferred speak). Multiple parts are queued, which the
+   * engine plays sequentially with a natural gap — used for spelling.
+   */
+  const speakParts = useCallback(
+    (parts: string[], rate?: number) => {
+      const texts = parts.filter(Boolean)
+      if (texts.length === 0) return
       const synth = window.speechSynthesis
       const selectedVoice = ttsVoiceName
         ? availableVoices.find((v) => v.name === ttsVoiceName) || null
         : null
-
-      const build = () => {
-        const utterance = new SpeechSynthesisUtterance(text)
-        utterance.rate = playbackSpeed
-        if (selectedVoice) utterance.voice = selectedVoice
-        return utterance
-      }
+      const speechRate = rate ?? playbackSpeed
 
       if (speakTimeoutRef.current) {
         clearTimeout(speakTimeoutRef.current)
@@ -207,10 +206,15 @@ export default function Practice() {
       const primeAndSpeak = () => {
         const primer = new SpeechSynthesisUtterance('.')
         primer.volume = 0
-        primer.rate = playbackSpeed
+        primer.rate = speechRate
         if (selectedVoice) primer.voice = selectedVoice
         synth.speak(primer)
-        synth.speak(build())
+        for (const text of texts) {
+          const utterance = new SpeechSynthesisUtterance(text)
+          utterance.rate = speechRate
+          if (selectedVoice) utterance.voice = selectedVoice
+          synth.speak(utterance)
+        }
       }
 
       if (synth.speaking || synth.pending || cancelPendingRef.current) {
@@ -230,6 +234,17 @@ export default function Practice() {
     },
     [availableVoices, playbackSpeed, ttsVoiceName]
   )
+
+  const speak = useCallback((text: string) => speakParts([text]), [speakParts])
+
+  /** Read the word out one letter at a time. */
+  const spell = useCallback(() => {
+    if (!target) return
+    // Letters only — punctuation inside a word would be read aloud by name
+    const letters = Array.from(target).filter((ch) => /[^\s]/.test(ch))
+    // Cap the rate so spelling stays intelligible at high playback speeds
+    speakParts(letters, Math.min(playbackSpeed, 1))
+  }, [speakParts, target, playbackSpeed])
 
   const toggleTranslation = useCallback(() => {
     if (!target) return
@@ -346,7 +361,7 @@ export default function Practice() {
   )
 
   // Shortcuts: Enter replay, [ previous, ] next, Tab hint, ` translate,
-  // - / = slower / faster, / random word. These fire even while the answer
+  // - / = slower / faster, / random word, \\ spell. These fire even while the answer
   // input has focus, so they must not be characters you'd type.
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -383,12 +398,17 @@ export default function Practice() {
       if (e.key === '/') {
         e.preventDefault()
         goRandom()
+        return
+      }
+      if (e.key === '\\') {
+        e.preventDefault()
+        spell()
       }
     }
 
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [goRandom, goTo, index, speak, stepSpeed, target, toggleTranslation])
+  }, [goRandom, goTo, index, speak, spell, stepSpeed, target, toggleTranslation])
 
   const handleChange = (next: string) => {
     const prev = value
@@ -757,7 +777,15 @@ export default function Practice() {
                     title="Replay the word (Enter)"
                     className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-gray-900 text-white text-sm hover:bg-gray-800"
                   >
-                    ▶ Replay
+                    Replay
+                  </button>
+                  <button
+                    type="button"
+                    onClick={spell}
+                    title="Spell the word letter by letter (\)"
+                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-300 bg-white text-sm text-gray-700 hover:bg-gray-50"
+                  >
+                    Spell
                   </button>
                   <button
                     type="button"
@@ -851,14 +879,14 @@ export default function Practice() {
                       onClick={() => goTo(index - 1)}
                       className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg hover:bg-gray-50"
                     >
-                      ◂ Prev
+                      Prev
                     </button>
                     <button
                       type="button"
                       onClick={() => goTo(index + 1)}
                       className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg hover:bg-gray-50"
                     >
-                      Next ▸
+                      Next
                     </button>
                     <button
                       type="button"
@@ -866,7 +894,7 @@ export default function Practice() {
                       title="Jump to a random word (/)"
                       className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg hover:bg-gray-50"
                     >
-                      🎲 Random
+                      random
                     </button>
                   </div>
                 </div>
@@ -1082,6 +1110,7 @@ export default function Practice() {
           <span><kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">[</kbd> previous</span>
           <span><kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">]</kbd> next</span>
           <span><kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">/</kbd> random</span>
+          <span><kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">\</kbd> spell</span>
           <span><kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">Tab</kbd> reveal hint</span>
           <span><kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">`</kbd> translate</span>
           <span>

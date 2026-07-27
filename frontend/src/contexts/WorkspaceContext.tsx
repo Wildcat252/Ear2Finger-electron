@@ -50,6 +50,7 @@ interface WorkspaceState {
   ttsVoiceName: string
   ttsWordByWord: boolean
   ttsWordInterval: number
+  ttsWordsPerGap: number
   wordInputs: string[]
   wordHintIndex: number | null
   wordHintUsed: boolean[]
@@ -64,10 +65,39 @@ const defaultScores: VideoSessionScores = {
 }
 
 const STORAGE_KEY = 'ear2finger-workspace-progress'
+// The chosen dictation voice has its own key so it survives even if the
+// workspace snapshot below is cleared.
+const VOICE_STORAGE_KEY = 'ear2finger-tts-voice'
+
+// Playback & grading preferences get their own key so they persist even if
+// the workspace snapshot is cleared.
+const DURABLE_STORAGE_KEY = 'ear2finger-playback-settings'
+
+type DurableSettings = {
+  pauseInterval: number
+  repeatCount: number | '∞'
+  ignorePunctuation: boolean
+  ignoreCase: boolean
+  playbackSpeed: number
+  ttsWordByWord: boolean
+  ttsWordInterval: number
+  ttsWordsPerGap: number
+}
+
+function loadDurableSettings(): Partial<DurableSettings> {
+  try {
+    const raw = localStorage.getItem(DURABLE_STORAGE_KEY)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw) as Partial<DurableSettings>
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
 
 function loadPersistedState(): Partial<WorkspaceState> | null {
   try {
-    const raw = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem(STORAGE_KEY) : null
+    const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEY) : null
     if (!raw) return null
     const parsed = JSON.parse(raw) as Partial<WorkspaceState>
     return parsed && typeof parsed === 'object' ? parsed : null
@@ -94,6 +124,7 @@ const initialState: WorkspaceState = {
   ttsVoiceName: '',
   ttsWordByWord: false,
   ttsWordInterval: 0.5,
+  ttsWordsPerGap: 1,
   wordInputs: [],
   wordHintIndex: null,
   wordHintUsed: [],
@@ -119,6 +150,7 @@ type WorkspaceContextValue = WorkspaceState & {
   setTtsVoiceName: (v: string) => void
   setTtsWordByWord: (v: boolean) => void
   setTtsWordInterval: (v: number) => void
+  setTtsWordsPerGap: (v: number) => void
   setWordInputs: (v: string[] | ((prev: string[]) => string[])) => void
   setWordHintIndex: (v: number | null) => void
   setWordHintUsed: (v: boolean[] | ((prev: boolean[]) => boolean[])) => void
@@ -130,7 +162,9 @@ type WorkspaceContextValue = WorkspaceState & {
 const WorkspaceContext = createContext<WorkspaceContextValue | null>(null)
 
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
-  // Load once per Provider mount so that when user navigates back (Provider may remount), we restore from latest sessionStorage.
+  // Load once per Provider mount so navigating back (which remounts the
+  // Provider) restores the latest snapshot. Stored in localStorage, so the
+  // selected lesson and position also survive closing the app.
   const [persistedSnapshot] = useState(loadPersistedState)
   const p = persistedSnapshot ?? {}
 
@@ -143,14 +177,63 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [currentSentenceIndex, setCurrentSentenceIndex] = useState(p.currentSentenceIndex ?? initialState.currentSentenceIndex)
   const [isPlaying, setIsPlaying] = useState(initialState.isPlaying)
   const [currentTime, setCurrentTime] = useState(p.currentTime ?? initialState.currentTime)
-  const [playbackSpeed, setPlaybackSpeed] = useState(p.playbackSpeed ?? initialState.playbackSpeed)
-  const [pauseInterval, setPauseInterval] = useState(p.pauseInterval ?? initialState.pauseInterval)
-  const [ignorePunctuation, setIgnorePunctuation] = useState(p.ignorePunctuation ?? initialState.ignorePunctuation)
-  const [ignoreCase, setIgnoreCase] = useState(p.ignoreCase ?? initialState.ignoreCase)
-  const [repeatCount, setRepeatCount] = useState<number | '∞'>(p.repeatCount ?? initialState.repeatCount)
-  const [ttsVoiceName, setTtsVoiceName] = useState<string>(p.ttsVoiceName ?? initialState.ttsVoiceName)
-  const [ttsWordByWord, setTtsWordByWord] = useState<boolean>(p.ttsWordByWord ?? initialState.ttsWordByWord)
-  const [ttsWordInterval, setTtsWordInterval] = useState<number>(p.ttsWordInterval ?? initialState.ttsWordInterval)
+  const [durable] = useState(loadDurableSettings)
+  const [playbackSpeed, setPlaybackSpeed] = useState(durable.playbackSpeed ?? p.playbackSpeed ?? initialState.playbackSpeed)
+  const [pauseInterval, setPauseInterval] = useState(durable.pauseInterval ?? p.pauseInterval ?? initialState.pauseInterval)
+  const [ignorePunctuation, setIgnorePunctuation] = useState(durable.ignorePunctuation ?? p.ignorePunctuation ?? initialState.ignorePunctuation)
+  const [ignoreCase, setIgnoreCase] = useState(durable.ignoreCase ?? p.ignoreCase ?? initialState.ignoreCase)
+  const [repeatCount, setRepeatCount] = useState<number | '∞'>(durable.repeatCount ?? p.repeatCount ?? initialState.repeatCount)
+
+  const [ttsVoiceName, setTtsVoiceNameState] = useState<string>(() => {
+    try {
+      const saved = localStorage.getItem(VOICE_STORAGE_KEY)
+      if (saved !== null) return saved
+    } catch {
+      // storage unavailable — fall back to the session snapshot
+    }
+    return p.ttsVoiceName ?? initialState.ttsVoiceName
+  })
+  const setTtsVoiceName = useCallback((v: string) => {
+    setTtsVoiceNameState(v)
+    try {
+      localStorage.setItem(VOICE_STORAGE_KEY, v)
+    } catch {
+      // storage unavailable — the choice still applies for this session
+    }
+  }, [])
+  const [ttsWordByWord, setTtsWordByWord] = useState<boolean>(durable.ttsWordByWord ?? p.ttsWordByWord ?? initialState.ttsWordByWord)
+  const [ttsWordInterval, setTtsWordInterval] = useState<number>(durable.ttsWordInterval ?? p.ttsWordInterval ?? initialState.ttsWordInterval)
+  const [ttsWordsPerGap, setTtsWordsPerGap] = useState<number>(durable.ttsWordsPerGap ?? p.ttsWordsPerGap ?? initialState.ttsWordsPerGap)
+
+  // Persist playback, grading and word-by-word settings across app restarts
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        DURABLE_STORAGE_KEY,
+        JSON.stringify({
+          pauseInterval,
+          repeatCount,
+          ignorePunctuation,
+          ignoreCase,
+          playbackSpeed,
+          ttsWordByWord,
+          ttsWordInterval,
+          ttsWordsPerGap,
+        })
+      )
+    } catch {
+      // storage unavailable — settings still apply for this session
+    }
+  }, [
+    pauseInterval,
+    repeatCount,
+    ignorePunctuation,
+    ignoreCase,
+    playbackSpeed,
+    ttsWordByWord,
+    ttsWordInterval,
+    ttsWordsPerGap,
+  ])
   const [wordInputs, setWordInputs] = useState<string[]>(p.wordInputs ?? initialState.wordInputs)
   const [wordHintIndex, setWordHintIndex] = useState<number | null>(initialState.wordHintIndex)
   const [wordHintUsed, setWordHintUsed] = useState<boolean[]>(p.wordHintUsed ?? initialState.wordHintUsed)
@@ -181,13 +264,14 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         ttsVoiceName,
         ttsWordByWord,
         ttsWordInterval,
+        ttsWordsPerGap,
         wordInputs,
         wordHintIndex,
         wordHintUsed,
         wordErrorChars,
         videoSessionScores,
       }
-      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(payload))
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(payload))
     } catch {
       // ignore
     }
@@ -209,6 +293,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     ttsVoiceName,
     ttsWordByWord,
     ttsWordInterval,
+    ttsWordsPerGap,
     wordInputs,
     wordHintIndex,
     wordHintUsed,
@@ -251,6 +336,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     setTtsWordByWord,
     ttsWordInterval,
     setTtsWordInterval,
+    ttsWordsPerGap,
+    setTtsWordsPerGap,
     wordInputs,
     setWordInputs,
     wordHintIndex,
