@@ -13,6 +13,9 @@ import {
 import { useWorkspace } from '../contexts/WorkspaceContext'
 import { usePremiumVoices } from '../voices'
 import { loadAudioSettings, playCelebrationChime, playMistakeBuzz } from '../audio'
+import { WordLists } from './practice/WordLists'
+import { AddWordsSidebar } from './practice/AddWordsSidebar'
+import { DrillCard } from './practice/DrillCard'
 
 const PAGE_SIZE = 30
 const SPEED_OPTIONS = [0.2, 0.4, 0.6, 0.8, 1, 1.2]
@@ -614,69 +617,18 @@ export default function Practice() {
 
       <div className="flex-1 flex flex-col md:flex-row overflow-hidden min-h-0">
         {/* Sidebar: import more words */}
-        <aside
-          className={`w-full md:w-72 shrink-0 bg-gray-50 border-gray-200 border-b md:border-b-0 md:border-r flex flex-col min-h-0 overflow-y-auto ${sidebarOpen ? '' : 'max-md:hidden'
-            } ${sidebarCollapsed ? 'md:hidden' : ''}`}
-        >
-
-          <div className="p-4">
-            <h2 className="text-sm font-semibold text-gray-900">Add words</h2>
-            <p className="text-xs text-gray-500 mt-1 mb-3">
-              Type or paste words to practice, separated by commas, spaces or new lines.
-            </p>
-            <textarea
-              value={newWords}
-              onChange={(e) => setNewWords(e.target.value)}
-              onKeyDown={(e) => {
-                // Keep typing local so the page shortcuts don't fire in here
-                e.stopPropagation()
-                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                  e.preventDefault()
-                  handleAddWords()
-                }
-              }}
-              rows={8}
-              placeholder={'accommodate\nrhythm, liaison\nconscience'}
-              className="w-full border-2 border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent resize-none bg-white"
-            />
-            <button
-              type="button"
-              onClick={handleAddWords}
-              disabled={adding || newWords.trim().length === 0}
-              className="mt-2 w-full px-3 py-2 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              {adding ? 'Adding…' : 'Add to practice'}
-            </button>
-            {addMessage && (
-              <p className="mt-2 text-xs text-green-700 bg-green-50 rounded px-2 py-1">{addMessage}</p>
-            )}
-
-            <div className="mt-5 pt-4 border-t border-gray-200">
-              <h3 className="text-xs font-semibold text-gray-900 mb-2">
-                Your words <span className="font-normal text-gray-400">({customWords.length})</span>
-              </h3>
-              {customWords.length === 0 ? (
-                <p className="text-xs text-gray-500">
-                  Words you add appear here alongside the ones from your dictation mistakes.
-                </p>
-              ) : (
-                <ul className="space-y-1">
-                  {customWords.map((w) => (
-                    <li
-                      key={w}
-                      className="flex items-center justify-between gap-2 text-xs font-mono text-gray-700 bg-white border border-gray-200 rounded px-2 py-1"
-                    >
-                      <span className="truncate">{displayOf(w)}</span>
-                      {binnedSet.has(w) && (
-                        <span className="text-[10px] font-sans text-gray-400 shrink-0">binned</span>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          </div>
-        </aside>
+        <AddWordsSidebar
+          sidebarOpen={sidebarOpen}
+          sidebarCollapsed={sidebarCollapsed}
+          newWords={newWords}
+          setNewWords={setNewWords}
+          adding={adding}
+          addMessage={addMessage}
+          customWords={customWords}
+          binnedSet={binnedSet}
+          handleAddWords={handleAddWords}
+          displayOf={displayOf}
+        />
 
         <main className="flex-1 bg-gray-50 overflow-y-auto min-h-0 p-4 md:p-6">
         <div className="max-w-4xl mx-auto w-full space-y-6">
@@ -695,344 +647,52 @@ export default function Practice() {
             </div>
           ) : (
             <>
-              {/* Drill */}
-              {words.length === 0 ? (
-                <div className="bg-white rounded-xl border border-gray-200 p-6 text-center">
-                  <p className="text-sm text-gray-700 font-medium">Every word is in the bin.</p>
-                  <p className="text-xs text-gray-500 mt-1">
-                    Recover one below to keep practicing.
-                  </p>
-                </div>
-              ) : (
-              <section className="bg-white rounded-xl border border-gray-200 p-5 md:p-6">
-                <div className="flex items-center justify-between mb-4">
-                  <h2 className="text-sm font-semibold text-gray-900">
-                    Listen and type the word
-                  </h2>
-                  <span className="text-xs text-gray-500 tabular-nums">
-                    {index + 1} / {words.length}
-                  </span>
-                </div>
+              <DrillCard
+                index={index}
+                words={words}
+                target={target}
+                value={value}
+                isCorrect={isCorrect}
+                hintShown={hintShown}
+                underlineClass={underlineClass}
+                playbackSpeed={playbackSpeed}
+                inputRef={inputRef}
+                translationVisible={translationVisible}
+                translationLoading={translationLoading}
+                translationError={translationError}
+                translation={translation}
+                handleChange={handleChange}
+                setHintShown={setHintShown}
+                speak={speak}
+                spell={spell}
+                toggleTranslation={toggleTranslation}
+                stepSpeed={stepSpeed}
+                goTo={goTo}
+                goRandom={goRandom}
+              />
 
-                <div className="flex items-center gap-3 mb-4">
-                  <button
-                    type="button"
-                    onClick={() => speak(target)}
-                    title="Replay the word (Enter)"
-                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-gray-900 text-white text-sm hover:bg-gray-800"
-                  >
-                    Replay
-                  </button>
-                  <button
-                    type="button"
-                    onClick={spell}
-                    title="Spell the word letter by letter (\)"
-                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-300 bg-white text-sm text-gray-700 hover:bg-gray-50"
-                  >
-                    Spell
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setHintShown((h) => !h)}
-                    title="Reveal or hide the word (Tab)"
-                    className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border text-sm transition-colors ${hintShown
-                      ? 'border-amber-300 bg-amber-100 text-amber-900'
-                      : 'border-amber-200 bg-amber-50 text-amber-900 hover:bg-amber-100'
-                      }`}
-                  >
-                    Hint
-                  </button>
-                  <button
-                    type="button"
-                    onClick={toggleTranslation}
-                    title="Translate the word (`)"
-                    className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border text-sm transition-colors ${translationVisible
-                      ? 'border-indigo-300 bg-indigo-50 text-indigo-800'
-                      : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50'
-                      }`}
-                  >
-                    Translate
-                  </button>
-
-                  <div className="ml-auto flex items-center gap-1 text-xs text-gray-600">
-                    <span className="mr-1">Speed</span>
-                    <button
-                      type="button"
-                      onClick={() => stepSpeed(-1)}
-                      disabled={playbackSpeed <= SPEED_OPTIONS[0]}
-                      title="Slower (-)"
-                      className="w-7 h-7 rounded-lg border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
-                    >
-                      −
-                    </button>
-                    <span className="w-10 text-center tabular-nums font-medium text-gray-900">
-                      {playbackSpeed}x
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => stepSpeed(1)}
-                      disabled={playbackSpeed >= SPEED_OPTIONS[SPEED_OPTIONS.length - 1]}
-                      title="Faster (=)"
-                      className="w-7 h-7 rounded-lg border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
-                    >
-                      +
-                    </button>
-                  </div>
-                </div>
-
-                <input
-                  ref={inputRef}
-                  type="text"
-                  value={value}
-                  onChange={(e) => handleChange(e.target.value)}
-                  placeholder="Type what you hear…"
-                  aria-label="Practice word"
-                  autoComplete="off"
-                  spellCheck={false}
-                  className={`w-full bg-transparent border-0 outline-none px-1 py-1 text-gray-900 ${underlineClass}`}
-                  style={{ fontSize: 'clamp(1.25rem, 5vw, 2.25rem)' }}
-                />
-
-                <div className="mt-3 min-h-[1.75rem] flex items-center gap-3">
-                  {isCorrect && (
-                    <span className="inline-flex items-center gap-1 text-green-600 font-semibold text-sm">
-                      ✔ Correct
-                    </span>
-                  )}
-                  {hintShown && !isCorrect && (
-                    <span className="font-mono text-gray-400">{target}</span>
-                  )}
-                </div>
-
-                {translationVisible && (
-                  <div className="mt-1 text-sm md:text-base text-gray-600 italic">
-                    {translationLoading && <span>Translating…</span>}
-                    {translationError && (
-                      <span className="text-red-600 not-italic">{translationError}</span>
-                    )}
-                    {translation && !translationLoading && !translationError && (
-                      <span>{translation}</span>
-                    )}
-                  </div>
-                )}
-
-                <div className="mt-4 flex items-center justify-between border-t border-gray-100 pt-4">
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => goTo(index - 1)}
-                      className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg hover:bg-gray-50"
-                    >
-                      Prev
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => goTo(index + 1)}
-                      className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg hover:bg-gray-50"
-                    >
-                      Next
-                    </button>
-                    <button
-                      type="button"
-                      onClick={goRandom}
-                      title="Jump to a random word (/)"
-                      className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg hover:bg-gray-50"
-                    >
-                      random
-                    </button>
-                  </div>
-                </div>
-              </section>
-              )}
-
-              {/* Word list */}
-              <section className="bg-white rounded-xl border border-gray-200 p-4">
-                <div className="flex items-center justify-between mb-1">
-                  <button
-                    type="button"
-                    onClick={() => setTableVisible((v) => !v)}
-                    title="Show or hide the list"
-                    className="flex items-center gap-1.5 text-sm font-semibold text-gray-900 hover:text-gray-600"
-                  >
-                    <span className={`transition-transform ${tableVisible ? '' : '-rotate-90'}`}>▾</span>
-                    Top tricky words
-                    <span className="font-normal text-gray-400 text-xs">({words.length})</span>
-                  </button>
-                  <div className={`flex items-center gap-2 text-[11px] text-gray-500 ${tableVisible ? '' : 'hidden'}`}>
-                    <button
-                      type="button"
-                      disabled={page === 0}
-                      onClick={() => setPage((p) => Math.max(0, p - 1))}
-                      className="px-1.5 py-0.5 rounded border border-gray-200 disabled:opacity-40"
-                    >
-                      ‹
-                    </button>
-                    <span>
-                      Page {page + 1} / {pageCount}
-                    </span>
-                    <button
-                      type="button"
-                      disabled={page + 1 >= pageCount}
-                      onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
-                      className="px-1.5 py-0.5 rounded border border-gray-200 disabled:opacity-40"
-                    >
-                      ›
-                    </button>
-                  </div>
-                </div>
-                {!tableVisible ? null : (
-                  <>
-                <p className="text-xs text-gray-500 mb-4">
-                  Words where your most recent attempt required more than one try. Click one to
-                  practice it, or remove it once you've learnt it.
-                </p>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {pageWords.map((w) => {
-                    const rawRetry = w.latest_spell_retry_times ?? 0
-                    const retry = Math.max(1, Math.round(rawRetry))
-                    const label = displayOf(w.word)
-                    const globalIndex = words.findIndex((x) => x.word === w.word)
-                    const isActive = globalIndex === index
-                    const intensity =
-                      retry >= 9 ? 'bg-rose-900' :
-                        retry >= 8 ? 'bg-rose-800' :
-                          retry >= 7 ? 'bg-rose-700' :
-                            retry >= 6 ? 'bg-rose-600' :
-                              retry >= 5 ? 'bg-rose-500' :
-                                retry >= 4 ? 'bg-rose-400' :
-                                  retry >= 3 ? 'bg-rose-300' :
-                                    retry >= 2 ? 'bg-rose-200' :
-                                      'bg-rose-100'
-                    return (
-                      <div
-                        key={w.word}
-                        onClick={() => goTo(globalIndex)}
-                        className={`flex items-center justify-between gap-2 rounded-lg border px-3 py-2 cursor-pointer transition-colors ${isActive
-                          ? 'border-indigo-300 bg-indigo-50'
-                          : 'border-gray-100 bg-gray-50 hover:bg-gray-100'
-                          }`}
-                      >
-                        <div className="text-xs font-mono text-gray-800 truncate">{label}</div>
-                        <div className="flex items-center gap-1.5 shrink-0">
-                          <span
-                            className={`inline-block w-3 h-3 rounded-sm ${intensity}`}
-                            title={`${retry} tries`}
-                          />
-                          <span className="text-[11px] text-gray-600 tabular-nums">{retry}×</span>
-                          <button
-                            type="button"
-                            disabled={deleting === w.word}
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              handleBin(w.word)
-                            }}
-                            title="I've learnt this word — move it to the bin"
-                            aria-label="Move to bin"
-                            className="ml-1 p-1 rounded text-gray-400 hover:text-red-600 hover:bg-red-100 disabled:opacity-40"
-                          >
-                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24" aria-hidden>
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M4 7h16M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2m-9 0l1 12a1 1 0 001 1h6a1 1 0 001-1l1-12" />
-                            </svg>
-                          </button>
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
-                  </>
-                )}
-              </section>
-
-              {/* Word bin — binned words are hidden from the drill but recoverable */}
-              <section className="bg-white rounded-xl border border-gray-200 p-4">
-                <div className="flex items-center justify-between">
-                  <button
-                    type="button"
-                    onClick={() => setBinVisible((v) => !v)}
-                    className="flex items-center gap-1.5 text-sm font-semibold text-gray-900 hover:text-gray-600"
-                  >
-                    <span className={`transition-transform ${binVisible ? '' : '-rotate-90'}`}>▾</span>
-                    Word bin
-                    <span className="font-normal text-gray-400 text-xs">({binList.length})</span>
-                  </button>
-                  {binVisible && binList.length > 0 && (
-                    <div className="flex items-center gap-1">
-                      <button
-                        type="button"
-                        disabled={bulkBusy}
-                        onClick={handleRecoverAll}
-                        title="Recover all"
-                        aria-label="Recover all"
-                        className="p-1.5 rounded-lg text-gray-500 hover:text-gray-900 hover:bg-gray-100 disabled:opacity-40"
-                      >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24" aria-hidden>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M3 10a8 8 0 1114.32 4.9M3 10V4m0 6h6" />
-                        </svg>
-                      </button>
-                      <button
-                        type="button"
-                        disabled={bulkBusy}
-                        onClick={handleDeleteAllForever}
-                        title="Delete all permanently"
-                        aria-label="Delete all permanently"
-                        className="p-1.5 rounded-lg text-gray-500 hover:text-red-600 hover:bg-red-50 disabled:opacity-40"
-                      >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24" aria-hidden>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M4 7h16M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2m-9 0l1 12a1 1 0 001 1h6a1 1 0 001-1l1-12" />
-                        </svg>
-                      </button>
-                    </div>
-                  )}
-                </div>
-
-                {binVisible && (
-                  <>
-                    {binList.length === 0 ? (
-                      <p className="text-xs text-gray-500 mt-3">The bin is empty.</p>
-                    ) : (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
-                        {binList.map((w) => (
-                          <div
-                            key={w.word}
-                            className="flex items-center justify-between gap-2 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2"
-                          >
-                            <div className="text-xs font-mono text-gray-700 truncate">
-                              {displayOf(w.word)}
-                            </div>
-                            <div className="flex items-center gap-1 shrink-0">
-                              <button
-                                type="button"
-                                disabled={deleting === w.word || bulkBusy}
-                                onClick={() => handleRecover(w.word)}
-                                title="Recover"
-                                aria-label="Recover"
-                                className="p-1 rounded text-gray-500 hover:text-gray-900 hover:bg-gray-200 disabled:opacity-40"
-                              >
-                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24" aria-hidden>
-                                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 10a8 8 0 1114.32 4.9M3 10V4m0 6h6" />
-                                </svg>
-                              </button>
-                              <button
-                                type="button"
-                                disabled={deleting === w.word || bulkBusy}
-                                onClick={() => handleDeleteForever(w.word)}
-                                title="Delete permanently — this cannot be undone"
-                                aria-label="Delete permanently"
-                                className="p-1 rounded text-gray-500 hover:text-red-600 hover:bg-red-100 disabled:opacity-40"
-                              >
-                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24" aria-hidden>
-                                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 7h16M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2m-9 0l1 12a1 1 0 001 1h6a1 1 0 001-1l1-12" />
-                                </svg>
-                              </button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </>
-                )}
-              </section>
+              <WordLists
+                words={words}
+                binList={binList}
+                pageWords={pageWords}
+                page={page}
+                pageCount={pageCount}
+                setPage={setPage}
+                index={index}
+                tableVisible={tableVisible}
+                setTableVisible={setTableVisible}
+                binVisible={binVisible}
+                setBinVisible={setBinVisible}
+                deleting={deleting}
+                bulkBusy={bulkBusy}
+                goTo={goTo}
+                handleBin={handleBin}
+                handleRecover={handleRecover}
+                handleDeleteForever={handleDeleteForever}
+                handleRecoverAll={handleRecoverAll}
+                handleDeleteAllForever={handleDeleteAllForever}
+                displayOf={displayOf}
+              />
             </>
           )}
         </div>
