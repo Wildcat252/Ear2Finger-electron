@@ -8,6 +8,7 @@
   "scripts": {
     "electron:vendor": "node scripts/download-qdrant.mjs",
     "electron:dev": "node scripts/electron-dev.mjs",
+    "web:dev": "node scripts/electron-dev.mjs --web",
     "electron:build:frontend": "npm install --prefix frontend && npm run build --prefix frontend",
     "electron:build:backend": "bash scripts/pyinstaller-build-backend.sh",
     "electron:pack": "npm run electron:build:backend && npm run electron:build:frontend && electron-builder"

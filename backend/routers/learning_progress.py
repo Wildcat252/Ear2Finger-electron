@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from auth import get_current_user
-from database import LearningProgress, Sentence, User, Video, get_db
+from database import LearningProgress, PracticeWordState, Sentence, User, Video, get_db
 from services.qdrant_client import ingest_learning_progress_event
 
 router = APIRouter()
@@ -459,3 +459,163 @@ async def get_user_stats(
         top_hint_words=top_hint_words,
         daily=daily_stats,
     )
+
+
+
+class WordRef(BaseModel):
+    word: str
+
+
+class PracticeWordStates(BaseModel):
+    binned: List[str]
+    deleted: List[str]
+    custom: List[str]
+
+
+class AddWordsRequest(BaseModel):
+    words: List[str]
+
+
+def _clear_word_from_progress(db: Session, user_id: int, word: str) -> int:
+    """Strip a word from the user's progress blobs so it stops being 'tricky'.
+
+    Stats are recomputed per request from LearningProgress JSON; `error_chars`
+    is what drives latest_spell_retry_times.
+    """
+    rows = (
+        db.query(LearningProgress)
+        .filter(LearningProgress.user_id == user_id)
+        .all()
+    )
+    changed = 0
+    for row in rows:
+        try:
+            blob = json.loads(row.data or "{}")
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(blob, dict):
+            continue
+        touched = False
+        for key in ("error_chars", "hint_words", "hinted_words", "incorrect_words"):
+            val = blob.get(key)
+            if isinstance(val, dict) and word in val:
+                val.pop(word, None)
+                touched = True
+            elif isinstance(val, list) and word in val:
+                blob[key] = [w for w in val if w != word]
+                touched = True
+        if touched:
+            row.data = json.dumps(blob)
+            changed += 1
+    return changed
+
+
+def _get_row(db: Session, user_id: int, word: str) -> Optional[PracticeWordState]:
+    return (
+        db.query(PracticeWordState)
+        .filter(
+            PracticeWordState.user_id == user_id,
+            PracticeWordState.word == word,
+        )
+        .first()
+    )
+
+
+def _set_word_status(db: Session, user_id: int, word: str, status: str) -> None:
+    row = _get_row(db, user_id, word)
+    if row is None:
+        db.add(PracticeWordState(user_id=user_id, word=word, status=status))
+    else:
+        row.status = status
+
+
+@router.get("/user/practice/words", response_model=PracticeWordStates)
+async def get_practice_word_states(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> PracticeWordStates:
+    """Words the user has binned (recoverable) or deleted (permanent)."""
+    rows = (
+        db.query(PracticeWordState)
+        .filter(PracticeWordState.user_id == current_user.id)
+        .all()
+    )
+    return PracticeWordStates(
+        binned=[r.word for r in rows if r.status == "binned"],
+        deleted=[r.word for r in rows if r.status == "deleted"],
+        custom=[r.word for r in rows if r.is_custom and r.status != "deleted"],
+    )
+
+
+@router.post("/user/practice/words/bin")
+async def bin_practice_word(
+    body: WordRef,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Move a word to the bin: hidden from the tricky list, still recoverable."""
+    _set_word_status(db, current_user.id, body.word, "binned")
+    db.commit()
+    return {"message": "binned", "word": body.word}
+
+
+@router.post("/user/practice/words/recover")
+async def recover_practice_word(
+    body: WordRef,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Take a word back out of the bin so it returns to the practice list.
+
+    Custom words keep their row (they only exist because of it); auto-derived
+    tricky words simply lose their row and reappear from the stats.
+    """
+    row = _get_row(db, current_user.id, body.word)
+    if row is not None:
+        if row.is_custom:
+            row.status = "active"
+        else:
+            db.delete(row)
+    db.commit()
+    return {"message": "recovered", "word": body.word}
+
+
+@router.post("/user/practice/words/add", response_model=PracticeWordStates)
+async def add_practice_words(
+    body: AddWordsRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> PracticeWordStates:
+    """Add words by hand so they show up in the practice list."""
+    for raw in body.words:
+        word = (raw or "").strip()
+        if not word:
+            continue
+        row = _get_row(db, current_user.id, word)
+        if row is None:
+            db.add(
+                PracticeWordState(
+                    user_id=current_user.id,
+                    word=word,
+                    status="active",
+                    is_custom=True,
+                )
+            )
+        else:
+            row.is_custom = True
+            row.status = "active"
+    db.commit()
+    return await get_practice_word_states(db=db, current_user=current_user)
+
+
+@router.delete("/user/practice/words/{word}")
+async def delete_practice_word(
+    word: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Permanently remove a word: clears its history and never shows it again."""
+    rows_updated = _clear_word_from_progress(db, current_user.id, word)
+    _set_word_status(db, current_user.id, word, "deleted")
+    db.commit()
+    return {"message": "deleted", "word": word, "rows_updated": rows_updated}

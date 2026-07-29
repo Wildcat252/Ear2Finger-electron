@@ -66,6 +66,41 @@ export async function getUserStats(): Promise<UserStats> {
   return data
 }
 
+export interface PracticeWordStates {
+  /** Hidden from the tricky list but recoverable from the word bin. */
+  binned: string[]
+  /** Permanently removed — never shown again. */
+  deleted: string[]
+  /** Words the user added by hand. */
+  custom: string[]
+}
+
+/** Add words by hand to the practice list. Returns the updated state. */
+export async function addPracticeWords(words: string[]): Promise<PracticeWordStates> {
+  const { data } = await api.post<PracticeWordStates>('/api/user/practice/words/add', { words })
+  return data
+}
+
+export async function getPracticeWordStates(): Promise<PracticeWordStates> {
+  const { data } = await api.get<PracticeWordStates>('/api/user/practice/words')
+  return data
+}
+
+/** Move a word to the bin (recoverable). */
+export async function binPracticeWord(word: string): Promise<void> {
+  await api.post('/api/user/practice/words/bin', { word })
+}
+
+/** Take a word back out of the bin. */
+export async function recoverPracticeWord(word: string): Promise<void> {
+  await api.post('/api/user/practice/words/recover', { word })
+}
+
+/** Permanently delete a word: clears its history and never shows it again. */
+export async function deletePracticeWord(word: string): Promise<void> {
+  await api.delete(`/api/user/practice/words/${encodeURIComponent(word)}`)
+}
+
 /** This app only supports Google Gemini for LLM and embeddings. */
 export type AIProvider = 'gemini'
 

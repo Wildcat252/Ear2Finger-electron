@@ -1,17 +1,15 @@
 #!/bin/zsh
 
-# Change directory to the project folder.
+# First-time setup + launch for Ear2Finger.
+# Installs anything that's missing (backend venv, Python deps, npm packages),
+# then starts the app. After the first successful run, use Run.command for
+# faster launches that skip the setup steps.
+
 # ${0:A:h} resolves to this script's own directory, so the launcher works
 # no matter where the repository is cloned or moved.
 PROJECT_DIR="${0:A:h}"
 
-echo "========================================="
-echo "   Starting Ear2Finger..."
-echo "========================================="
-echo "Project directory: $PROJECT_DIR"
-echo ""
-
-# Add common Node/Homebrew paths (double-click launches with a sparse PATH).
+# Double-click launches get a sparse PATH; add common Node/Homebrew paths.
 export PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 
 # Print an error, keep the window open, and exit. Accepts multi-line messages.
@@ -24,52 +22,53 @@ fail() {
     exit 1
 }
 
-# --- Ensure we're in the right directory -----------------------------------
-if [ -d "$PROJECT_DIR" ]; then
-    cd "$PROJECT_DIR" || fail "Could not enter project directory: $PROJECT_DIR"
-else
-    fail "Project directory not found at $PROJECT_DIR"
-fi
+echo "========================================="
+echo "   Ear2Finger — first-time setup"
+echo "========================================="
+echo "Project directory: $PROJECT_DIR"
+echo ""
 
-# --- Pre-flight checks (clear messages instead of a silent crash) ----------
+cd "$PROJECT_DIR" || fail "Could not enter project directory: $PROJECT_DIR"
+
+# --- Required tools ---------------------------------------------------------
 command -v node >/dev/null 2>&1 || \
     fail "Node.js is not installed (or not on PATH). Install it from https://nodejs.org and try again."
 
 command -v npm >/dev/null 2>&1 || \
     fail "npm is not found on PATH. Make sure Node.js is installed correctly."
 
+command -v python3 >/dev/null 2>&1 || \
+    fail "python3 is not installed (or not on PATH). Install it from https://python.org and try again."
+
+# --- Backend: venv + Python dependencies ------------------------------------
 VENV_PY="$PROJECT_DIR/backend/venv/bin/python"
+
 if [ ! -x "$VENV_PY" ]; then
-    fail "Backend virtual environment is missing (backend/venv).
-Set it up once:
-  cd \"$PROJECT_DIR/backend\"
-  python3 -m venv venv
-  source venv/bin/activate
-  pip install -r requirements.txt"
+    echo "Creating backend virtual environment..."
+    python3 -m venv "$PROJECT_DIR/backend/venv" || fail "Could not create the backend virtual environment."
 fi
 
-echo "Checking backend dependencies..."
 if ! ( cd "$PROJECT_DIR/backend" && "$VENV_PY" -c "import main" >/dev/null 2>&1 ); then
-    fail "The backend can't start — its Python dependencies are not fully installed.
-Fix it:
-  cd \"$PROJECT_DIR/backend\"
-  source venv/bin/activate
-  pip install -r requirements.txt"
+    echo "Installing backend Python dependencies (this can take a few minutes)..."
+    "$VENV_PY" -m pip install -U pip >/dev/null || fail "Could not upgrade pip in the backend venv."
+    "$VENV_PY" -m pip install -r "$PROJECT_DIR/backend/requirements.txt" || \
+        fail "Backend dependency install failed. Scroll up for the pip error."
 fi
 
+# --- Root npm packages (Electron) --------------------------------------------
+if ! node -e "require('fs').accessSync(require('electron'))" >/dev/null 2>&1; then
+    echo "Installing Electron and root npm packages..."
+    npm install || fail "npm install failed in the project root. Scroll up for the error."
+fi
+
+# --- Frontend npm packages ----------------------------------------------------
 if [ ! -d "$PROJECT_DIR/frontend/node_modules" ]; then
-    fail "Frontend dependencies are missing.
-Install them:
-  npm install --prefix \"$PROJECT_DIR/frontend\""
+    echo "Installing frontend npm packages..."
+    npm install --prefix "$PROJECT_DIR/frontend" || \
+        fail "npm install failed in frontend/. Scroll up for the error."
 fi
 
-if [ ! -d "$PROJECT_DIR/node_modules/electron" ]; then
-    fail "Electron is not installed.
-Install it from the project root:
-  cd \"$PROJECT_DIR\" && npm install"
-fi
-
-# --- Free stale ports so a relaunch never crashes on a bound port ----------
+# --- Free stale ports so a relaunch never crashes on a bound port ------------
 # electron:dev starts uvicorn on 8000 and Vite on 3000. If a previous run's
 # servers are still alive, the new uvicorn fails to bind and the whole launch
 # tears down instantly. Stop anything left on those ports first.
@@ -87,9 +86,10 @@ for port in 8000 3000; do
     fi
 done
 
-# --- Launch -----------------------------------------------------------------
+# --- Launch -------------------------------------------------------------------
 echo ""
-echo "Launching Ear2Finger (first start can take ~10-20 seconds)..."
+echo "Setup complete. Launching Ear2Finger (first start can take ~10-20 seconds)..."
+echo "Next time, double-click Run.command for a faster launch."
 echo ""
 npm run electron:dev
 

@@ -1,8 +1,8 @@
 #!/bin/zsh
 
-# Quick launcher for repeat runs — assumes setup is already done
-# (backend/venv, frontend/node_modules, and root node_modules exist).
-# For the first run (installs everything), use Start.command instead.
+# Launch Ear2Finger in the browser only — no Electron window.
+# Same backend and database as the desktop app. Assumes setup is done
+# (run Start.command first if not).
 
 PROJECT_DIR="${0:A:h}"
 
@@ -20,7 +20,7 @@ fail() {
 }
 
 echo "========================================="
-echo "   Running Ear2Finger..."
+echo "   Ear2Finger — web only"
 echo "========================================="
 
 cd "$PROJECT_DIR" || fail "Could not enter project directory: $PROJECT_DIR"
@@ -28,8 +28,7 @@ cd "$PROJECT_DIR" || fail "Could not enter project directory: $PROJECT_DIR"
 # Fast sanity check: if setup is missing, point to Start.command instead of
 # crashing mid-launch with a confusing npm/python error.
 if [ ! -x "$PROJECT_DIR/backend/venv/bin/python" ] || \
-   [ ! -d "$PROJECT_DIR/frontend/node_modules" ] || \
-   [ ! -d "$PROJECT_DIR/node_modules/electron" ]; then
+   [ ! -d "$PROJECT_DIR/frontend/node_modules" ]; then
     fail "Setup is incomplete. Double-click Start.command first — it installs everything."
 fi
 
@@ -46,13 +45,13 @@ for port in 8000 3000; do
 done
 
 echo ""
-echo "Launching Ear2Finger..."
+echo "Starting servers — your browser will open at http://127.0.0.1:3000"
+echo "Keep this window open while using the app; press Ctrl+C here to stop."
 echo ""
-npm run electron:dev
+npm run web:dev
 
 # Keep the terminal open so the reason for closing is visible.
 echo ""
-echo "Ear2Finger has closed."
-echo "Logs: ~/Library/Application Support/ear2finger/ (startup.log, uvicorn.log)"
+echo "Ear2Finger web servers have stopped."
 echo "Press any key to close this window..."
 read -k 1 -s
