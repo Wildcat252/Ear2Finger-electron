@@ -74,6 +74,7 @@ export default function Workspace() {
   const {
     resetTtsWordQueue,
     skipWord: ttsSkipWord,
+    prevWord: ttsPrevWord,
     isCurrentSentenceFullyCorrectRef,
   } = useTtsPlayback({
     availableVoices,
@@ -438,6 +439,7 @@ export default function Workspace() {
     userInitiatedSentenceChangeRef,
     resetTtsWordQueue,
     skipWord: ttsSkipWord,
+    prevWord: ttsPrevWord,
     toggleTranslation,
   })
 
@@ -649,6 +651,7 @@ export default function Workspace() {
             wordInputRefs={wordInputRefs}
             resetTtsWordQueue={resetTtsWordQueue}
             ttsSkipWord={ttsSkipWord}
+            ttsPrevWord={ttsPrevWord}
             isPunctuationOnlyToken={isPunctuationOnlyToken}
             keybinds={keybinds}
             onAskCoach={(videoId) => coachRef.current?.openForVideo(videoId)}
@@ -707,6 +710,9 @@ export default function Workspace() {
           </span>
           <span>
             <kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">{displayKey(keybinds.wordByWord)}</kbd> WbW
+          </span>
+          <span>
+            <kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">{displayKey(keybinds.prevWord)}</kbd> prev word
           </span>
           <span>
             <kbd className="px-1.5 py-0.5 bg-white border border-gray-300 rounded font-mono">{displayKey(keybinds.skipWord)}</kbd> skip word

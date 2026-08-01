@@ -3,6 +3,8 @@ import { useWorkspace, type Sentence } from '../../contexts/WorkspaceContext'
 import { displayKey, type Keybindings } from '../../keybindings'
 
 const SPEED_OPTIONS = [0.2, 0.4, 0.6, 0.8, 1, 1.2]
+// How many times each word is spoken in word-by-word mode
+const WORD_REPEAT_OPTIONS = [1, 2, 3, 4, 5]
 
 function formatTime(seconds: number) {
   const mins = Math.floor(seconds / 60)
@@ -23,6 +25,7 @@ interface PlayerPanelProps {
   wordInputRefs: MutableRefObject<(HTMLInputElement | null)[]>
   resetTtsWordQueue: () => void
   ttsSkipWord: () => void
+  ttsPrevWord: () => void
   isPunctuationOnlyToken: (token: string) => boolean
   keybinds: Keybindings
   onAskCoach: (videoId: number) => void
@@ -44,6 +47,7 @@ export function PlayerPanel({
   wordInputRefs,
   resetTtsWordQueue,
   ttsSkipWord,
+  ttsPrevWord,
   isPunctuationOnlyToken,
   keybinds,
   onAskCoach,
@@ -65,6 +69,8 @@ export function PlayerPanel({
     setTtsWordInterval,
     ttsWordsPerGap,
     setTtsWordsPerGap,
+    ttsWordRepeat,
+    setTtsWordRepeat,
     videoSessionScores,
   } = useWorkspace()
 
@@ -345,6 +351,38 @@ export function PlayerPanel({
               className="w-12 bg-gray-800 border border-gray-700 rounded px-1.5 py-0.5 text-xs text-white text-right focus:outline-none focus:border-gray-500"
             />
           </div>
+        )}
+        {isTextLesson && ttsWordByWord && (
+          <div className="relative group">
+            <div className="bg-gray-900 text-white px-3 py-1.5 rounded-lg flex items-center gap-2 text-xs cursor-pointer">
+              <span>Repeat word: {ttsWordRepeat}x</span>
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </div>
+            <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg text-gray-900 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-10 min-w-[120px]">
+              {WORD_REPEAT_OPTIONS.map((n) => (
+                <button
+                  key={n}
+                  onClick={() => setTtsWordRepeat(n)}
+                  className={`w-full text-left px-4 py-2 text-xs text-gray-900 hover:bg-gray-100 ${ttsWordRepeat === n ? 'bg-gray-100 font-semibold' : ''
+                    }`}
+                >
+                  {n}x
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {isTextLesson && ttsWordByWord && (
+          <button
+            type="button"
+            onClick={() => ttsPrevWord()}
+            title={`Go back to the previous word (${displayKey(keybinds.prevWord)})`}
+            className="bg-gray-900 text-white px-3 py-1.5 rounded-lg text-xs cursor-pointer hover:bg-gray-800 transition-colors"
+          >
+            ⏮ Prev
+          </button>
         )}
         {isTextLesson && ttsWordByWord && (
           <button

@@ -66,6 +66,7 @@ export function useTtsPlayback(params: {
     ttsWordByWord,
     ttsWordInterval,
     ttsWordsPerGap,
+    ttsWordRepeat,
   } = useWorkspace()
 
   // Word-by-word queue position, so pause/resume continues mid-sentence
@@ -74,6 +75,8 @@ export function useTtsPlayback(params: {
   // Set by the word-by-word effect; skips the rest of the current word
   // (speech + gap + punctuation) and jumps to the next word immediately.
   const ttsSkipWordRef = useRef<(() => void) | null>(null)
+  // Same, in reverse: replays the previous word from its start.
+  const ttsPrevWordRef = useRef<(() => void) | null>(null)
   // Set whenever we intentionally cancel, so utterance.onerror does not treat
   // the resulting 'interrupted'/'canceled' error as a playback failure.
   const ttsCancelledIntentionallyRef = useRef(false)
@@ -99,6 +102,10 @@ export function useTtsPlayback(params: {
 
   const skipWord = useCallback(() => {
     ttsSkipWordRef.current?.()
+  }, [])
+
+  const prevWord = useCallback(() => {
+    ttsPrevWordRef.current?.()
   }, [])
 
   // Handle Text-To-Speech playback for custom text lessons
@@ -336,7 +343,18 @@ export function useTtsPlayback(params: {
       let currentSegIdx = -1
       let currentUtterance: SpeechSynthesisUtterance | null = null
 
-      const speakSegment = (segIdx: number) => {
+      // How many times each unit is spoken before moving on (1 = say it once).
+      // The unit is the whole group, so with Words/Gap > 1 the entire phrase —
+      // punctuation included — repeats as one piece rather than each word
+      // repeating on its own.
+      const wordRepeats = Math.max(1, Math.min(5, Math.floor(ttsWordRepeat || 1)))
+      const groupIdOf = segments.map((seg) => Math.floor(seg.tokenIdx / groupSize))
+      const groupFirstSeg = new Map<number, number>()
+      groupIdOf.forEach((gid, i) => {
+        if (!groupFirstSeg.has(gid)) groupFirstSeg.set(gid, i)
+      })
+
+      const speakSegment = (segIdx: number, pass = 1) => {
         if (segIdx >= segments.length) {
           onSentenceFinished()
           return
@@ -350,15 +368,30 @@ export function useTtsPlayback(params: {
 
         utterance.onend = () => {
           if (abandonedUtterances.has(utterance)) return
+          const gapMs = ttsWordInterval * 1500 * segment.gapMultiplier
+          const groupId = groupIdOf[segIdx]
+          const isLastOfGroup =
+            segIdx + 1 >= segments.length || groupIdOf[segIdx + 1] !== groupId
+          // At the end of a group, replay it from its first segment until the
+          // requested number of passes is done — with the same gap in between,
+          // so there is typing time on every pass.
+          if (isLastOfGroup && pass < wordRepeats) {
+            wordQueueTimeoutRef.current = setTimeout(() => {
+              wordQueueTimeoutRef.current = null
+              speakSegment(groupFirstSeg.get(groupId) ?? segIdx, pass + 1)
+            }, gapMs)
+            return
+          }
           // Resume position is tracked at token granularity
           if (segment.lastOfToken) wordQueueIndexRef.current = segment.tokenIdx + 1
           if (segIdx + 1 < segments.length) {
             // Wait for the word interval before the next segment, scaled up for
-            // longer words so there's enough time to type them
+            // longer words so there's enough time to type them. Carry the pass
+            // number within a group; reset it when crossing into the next one.
             wordQueueTimeoutRef.current = setTimeout(() => {
               wordQueueTimeoutRef.current = null
-              speakSegment(segIdx + 1)
-            }, ttsWordInterval * 1500 * segment.gapMultiplier)
+              speakSegment(segIdx + 1, isLastOfGroup ? 1 : pass)
+            }, gapMs)
           } else {
             onSentenceFinished()
           }
@@ -396,6 +429,30 @@ export function useTtsPlayback(params: {
           synth.cancel()
           onSentenceFinished()
         }
+      }
+
+      // Go back to the previous word: cut off the current speech and restart
+      // from the first segment of the preceding token. On the first word it
+      // simply replays that word from its start.
+      ttsPrevWordRef.current = () => {
+        if (currentSegIdx < 0) return
+        const tokenIdx = segments[currentSegIdx].tokenIdx
+        if (currentUtterance) abandonedUtterances.add(currentUtterance)
+        if (wordQueueTimeoutRef.current) {
+          clearTimeout(wordQueueTimeoutRef.current)
+          wordQueueTimeoutRef.current = null
+        }
+        // First segment of the current token; if we are already there, step to
+        // the token before it so a mid-word press does not just restart it.
+        let start = currentSegIdx
+        while (start > 0 && segments[start - 1].tokenIdx === tokenIdx) start--
+        if (start === currentSegIdx && start > 0) {
+          const prevTokenIdx = segments[start - 1].tokenIdx
+          start--
+          while (start > 0 && segments[start - 1].tokenIdx === prevTokenIdx) start--
+        }
+        wordQueueIndexRef.current = segments[start].tokenIdx
+        speakSegment(start)
       }
 
       if (!isWaitingForPauseIntervalRef.current) {
@@ -436,6 +493,7 @@ export function useTtsPlayback(params: {
 
     return () => {
       ttsSkipWordRef.current = null
+      ttsPrevWordRef.current = null
       // Mark as intentional so the cancelled utterance's onerror doesn't kill playback
       ttsCancelledIntentionallyRef.current = true
       synth.cancel()
@@ -462,7 +520,8 @@ export function useTtsPlayback(params: {
     ttsWordByWord,
     ttsWordInterval,
     ttsWordsPerGap,
+    ttsWordRepeat,
   ])
 
-  return { resetTtsWordQueue, skipWord, isCurrentSentenceFullyCorrectRef }
+  return { resetTtsWordQueue, skipWord, prevWord, isCurrentSentenceFullyCorrectRef }
 }

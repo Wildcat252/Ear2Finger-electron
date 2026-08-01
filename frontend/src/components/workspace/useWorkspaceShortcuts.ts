@@ -20,6 +20,7 @@ export function useWorkspaceShortcuts(params: {
   userInitiatedSentenceChangeRef: MutableRefObject<boolean>
   resetTtsWordQueue: () => void
   skipWord: () => void
+  prevWord: () => void
   toggleTranslation: () => void
 }) {
   const {
@@ -34,6 +35,7 @@ export function useWorkspaceShortcuts(params: {
     userInitiatedSentenceChangeRef,
     resetTtsWordQueue,
     skipWord: ttsSkipWord,
+    prevWord: ttsPrevWord,
     toggleTranslation,
   } = params
 
@@ -149,6 +151,11 @@ export function useWorkspaceShortcuts(params: {
       if (e.key === keybinds.skipWord) {
         e.preventDefault()
         ttsSkipWord()
+        return
+      }
+      if (e.key === keybinds.prevWord) {
+        e.preventDefault()
+        ttsPrevWord()
         return
       }
       if (e.key === keybinds.speedDown || e.key === keybinds.speedUp) {

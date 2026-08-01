@@ -11,6 +11,7 @@ export type KeybindAction =
   | 'speedUp'
   | 'wordByWord'
   | 'skipWord'
+  | 'prevWord'
 
 export type Keybindings = Record<KeybindAction, string>
 
@@ -24,6 +25,7 @@ export const KEYBIND_DEFAULTS: Keybindings = {
   speedUp: '=',
   wordByWord: 'Meta',
   skipWord: '/',
+  prevWord: "'",
 }
 
 export const KEYBIND_LABELS: Record<KeybindAction, string> = {
@@ -36,6 +38,7 @@ export const KEYBIND_LABELS: Record<KeybindAction, string> = {
   speedUp: 'Increase speed',
   wordByWord: 'Toggle word-by-word',
   skipWord: 'Skip word (word-by-word)',
+  prevWord: 'Previous word (word-by-word)',
 }
 
 export const KEYBIND_ACTIONS = Object.keys(KEYBIND_DEFAULTS) as KeybindAction[]
