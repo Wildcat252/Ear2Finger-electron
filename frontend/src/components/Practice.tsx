@@ -130,7 +130,12 @@ export default function Practice() {
       .then(([stats, states]) => {
         const deleted = new Set(states.deleted)
         const tricky = [...(stats.top_incorrect_words ?? [])]
-          .filter((w) => (w.latest_spell_retry_times ?? 1) >= 3 && !deleted.has(w.word))
+          .filter(
+            (w) =>
+              (w.latest_spell_retry_times ?? 1) >= 3 &&
+              (w.hint_count ?? 0) > 0 &&
+              !deleted.has(w.word)
+          )
           .sort((a, b) => (b.latest_spell_retry_times ?? 0) - (a.latest_spell_retry_times ?? 0))
         setTrickyWords(tricky)
         setCustomWords(states.custom)
