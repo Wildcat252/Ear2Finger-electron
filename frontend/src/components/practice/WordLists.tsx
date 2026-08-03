@@ -86,7 +86,7 @@ export function WordLists({
         {!tableVisible ? null : (
           <>
         <p className="text-xs text-gray-500 mb-4">
-          Words where your most recent attempt required more than one try. Click one to
+          Words your last attempt needed 3+ tries on and where you used a hint. Click one to
           practice it, or remove it once you've learnt it.
         </p>
 
@@ -123,6 +123,14 @@ export function WordLists({
                     title={`${retry} tries`}
                   />
                   <span className="text-[11px] text-gray-600 tabular-nums">{retry}×</span>
+                  {(w.hint_count ?? 0) > 0 && (
+                    <span
+                      className="text-[11px] text-amber-600 tabular-nums"
+                      title={`Hint used ${w.hint_count} time${w.hint_count === 1 ? '' : 's'}`}
+                    >
+                      💡{w.hint_count}
+                    </span>
+                  )}
                   <button
                     type="button"
                     disabled={deleting === w.word}
