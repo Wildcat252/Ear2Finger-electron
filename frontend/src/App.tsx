@@ -1,5 +1,7 @@
+import { useEffect } from 'react'
 import { BrowserRouter as Router, Routes, Route, Navigate, Outlet } from 'react-router-dom'
 import { WorkspaceProvider } from './contexts/WorkspaceContext'
+import { startSpeechKeepAlive } from './voices'
 import Workspace from './components/Workspace'
 import Practice from './components/Practice'
 import Dashboard from './components/Dashboard'
@@ -7,6 +9,9 @@ import Settings from './components/Settings'
 import YouTubeProcessor from './components/YouTubeProcessor'
 
 function App() {
+  // Chrome cuts speech off after ~15s without this nudge; see voices.ts.
+  useEffect(() => startSpeechKeepAlive(), [])
+
   return (
     <Router>
       <Routes>
