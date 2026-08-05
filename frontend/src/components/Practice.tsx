@@ -11,7 +11,7 @@ import {
   type WordStat,
 } from '../api'
 import { useWorkspace } from '../contexts/WorkspaceContext'
-import { usePremiumVoices } from '../voices'
+import { isNetworkVoice, usePremiumVoices } from '../voices'
 import { loadAudioSettings, playCelebrationChime, playMistakeBuzz } from '../audio'
 import { WordLists } from './practice/WordLists'
 import { AddWordsSidebar } from './practice/AddWordsSidebar'
@@ -211,11 +211,15 @@ export default function Practice() {
       }
 
       const primeAndSpeak = () => {
-        const primer = new SpeechSynthesisUtterance('.')
-        primer.volume = 0
-        primer.rate = speechRate
-        if (selectedVoice) primer.voice = selectedVoice
-        synth.speak(primer)
+        // Cloud voices are delayed by a network round-trip rather than engine
+        // warm-up, so the primer only buys a second round-trip. See voices.ts.
+        if (!isNetworkVoice(selectedVoice)) {
+          const primer = new SpeechSynthesisUtterance('.')
+          primer.volume = 0
+          primer.rate = speechRate
+          if (selectedVoice) primer.voice = selectedVoice
+          synth.speak(primer)
+        }
         for (const text of texts) {
           const utterance = new SpeechSynthesisUtterance(text)
           utterance.rate = speechRate

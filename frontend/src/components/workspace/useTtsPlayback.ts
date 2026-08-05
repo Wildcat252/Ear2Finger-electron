@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, type MutableRefObject } from 'react'
 import { useWorkspace } from '../../contexts/WorkspaceContext'
+import { estimatedVoiceLatency, isNetworkVoice, recordVoiceLatency } from '../../voices'
 
 // Scales the word-by-word TTS gap exponentially by word length so longer words
 // give more time to type: 0.5x under 3 letters (quick words need less time),
@@ -209,17 +210,23 @@ export function useTtsPlayback(params: {
     //    delay before calling speak() avoids this. So we queue a silent "primer"
     //    utterance immediately before the real one; the warm-up eats the primer
     //    instead of the sentence, since the two play back-to-back with no idle gap.
+    //
+    // The primer is skipped for cloud voices: their delay is a network round-trip,
+    // not engine warm-up, so priming buys nothing and costs a second round-trip
+    // (doubling the very latency it is meant to hide).
     const speakUtterance = (utterance: SpeechSynthesisUtterance) => {
       if (ttsSpeakTimeoutRef.current) {
         clearTimeout(ttsSpeakTimeoutRef.current)
         ttsSpeakTimeoutRef.current = null
       }
       const primeAndSpeak = () => {
-        const primer = new SpeechSynthesisUtterance('.')
-        primer.volume = 0
-        primer.rate = utterance.rate
-        if (utterance.voice) primer.voice = utterance.voice
-        synth.speak(primer)
+        if (!isNetworkVoice(utterance.voice)) {
+          const primer = new SpeechSynthesisUtterance('.')
+          primer.volume = 0
+          primer.rate = utterance.rate
+          if (utterance.voice) primer.voice = utterance.voice
+          synth.speak(primer)
+        }
         synth.speak(utterance)
       }
       if (synth.speaking || synth.pending || ttsCancelPendingRef.current) {
@@ -354,6 +361,19 @@ export function useTtsPlayback(params: {
         if (!groupFirstSeg.has(gid)) groupFirstSeg.set(gid, i)
       })
 
+      // A cloud voice stays silent until its audio comes back from the server, so
+      // what the learner actually hears between words is the gap PLUS that
+      // round-trip — the Word Gap setting stops meaning what it says. Subtracting
+      // the measured round-trip from the gap we wait folds the latency into the
+      // pause instead of adding to it. Local voices keep their existing timing.
+      const compensatedGap = (gapMs: number) => {
+        if (!isNetworkVoice(selectedVoice)) return gapMs
+        const latency = estimatedVoiceLatency(selectedVoice?.name)
+        // Always keep a real pause, so words never run together even if the
+        // round-trip is longer than the gap itself.
+        return Math.max(gapMs * 0.25, gapMs - latency)
+      }
+
       const speakSegment = (segIdx: number, pass = 1) => {
         if (segIdx >= segments.length) {
           onSentenceFinished()
@@ -366,9 +386,16 @@ export function useTtsPlayback(params: {
         currentSegIdx = segIdx
         currentUtterance = utterance
 
+        // Time from speak() to first audio, fed back into the gap compensation above.
+        let spokenAt = 0
+        utterance.onstart = () => {
+          if (abandonedUtterances.has(utterance) || !selectedVoice || !spokenAt) return
+          recordVoiceLatency(selectedVoice.name, performance.now() - spokenAt)
+        }
+
         utterance.onend = () => {
           if (abandonedUtterances.has(utterance)) return
-          const gapMs = ttsWordInterval * 1500 * segment.gapMultiplier
+          const gapMs = compensatedGap(ttsWordInterval * 1500 * segment.gapMultiplier)
           const groupId = groupIdOf[segIdx]
           const isLastOfGroup =
             segIdx + 1 >= segments.length || groupIdOf[segIdx + 1] !== groupId
@@ -405,6 +432,7 @@ export function useTtsPlayback(params: {
           setIsPlaying(false)
         }
 
+        spokenAt = performance.now()
         speakUtterance(utterance)
       }
 

@@ -15,6 +15,7 @@ import {
   type AudioSettings,
   type Waveform,
 } from '../../audio'
+import { isNetworkVoice } from '../../voices'
 
 interface AudioSectionProps {
   audio: AudioSettings
@@ -34,6 +35,8 @@ export function AudioSection({
   setTtsVoiceName,
   availableVoices,
 }: AudioSectionProps) {
+  const selectedVoice = availableVoices.find((v) => v.name === ttsVoiceName) ?? null
+
   return (
           <div className="w-full max-w-3xl text-left">
             <h1 className="text-2xl font-bold text-gray-900 mb-2">AUDIO</h1>
@@ -54,10 +57,17 @@ export function AudioSection({
                   <option value="">Default</option>
                   {availableVoices.map((v) => (
                     <option key={v.name} value={v.name}>
-                      {v.name} ({v.lang})
+                      {v.name} ({v.lang}){isNetworkVoice(v) ? ' — cloud, slower to start' : ''}
                     </option>
                   ))}
                 </select>
+                {isNetworkVoice(selectedVoice) && (
+                  <p className="text-xs text-amber-700 mt-2">
+                    This voice is synthesized online, so each phrase waits on a network
+                    round-trip before it plays. It sounds better but starts slower — for
+                    word-by-word practice a local voice is noticeably more responsive.
+                  </p>
+                )}
               </div>
 
               {/* Correct sound */}

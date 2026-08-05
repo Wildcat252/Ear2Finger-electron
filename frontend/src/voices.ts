@@ -74,6 +74,43 @@ export function usePremiumVoices(): SpeechSynthesisVoice[] {
   return voices
 }
 
+// Cloud ("network") voices are synthesized on a remote server, so every
+// utterance costs an HTTPS round-trip before any audio plays — Edge's
+// "Microsoft Ana Online (Natural)" family is the common case. Callers use this
+// to drop the warm-up primer (a wasted second round-trip) and to compensate the
+// word-by-word gap for the delay.
+//
+// localService is the spec-provided signal, but not every engine reports it
+// correctly, so Edge's naming convention is matched as a backstop.
+export function isNetworkVoice(voice: SpeechSynthesisVoice | null | undefined): boolean {
+  if (!voice) return false
+  if (voice.localService === false) return true
+  return /online\s*\(natural\)/i.test(voice.name)
+}
+
+// Rolling estimate of how long a voice takes between speak() and onstart, kept
+// per voice name. Word-by-word playback subtracts this from the gap it waits so
+// the silence the learner hears is the gap they configured, not gap + latency.
+const latencyByVoice = new Map<string, number>()
+
+// Never let a freak measurement (a stalled request, a backgrounded tab) eat the
+// whole gap; compensation is capped well below any usable Word Gap.
+const MAX_TRACKED_LATENCY_MS = 1500
+
+export function recordVoiceLatency(voiceName: string, ms: number): void {
+  if (!voiceName || !Number.isFinite(ms) || ms < 0) return
+  const sample = Math.min(ms, MAX_TRACKED_LATENCY_MS)
+  const prev = latencyByVoice.get(voiceName)
+  // Exponential moving average: smooths jitter but still tracks a network that
+  // gets slower or faster part-way through a lesson.
+  latencyByVoice.set(voiceName, prev === undefined ? sample : prev * 0.7 + sample * 0.3)
+}
+
+export function estimatedVoiceLatency(voiceName: string | undefined | null): number {
+  if (!voiceName) return 0
+  return latencyByVoice.get(voiceName) ?? 0
+}
+
 // Chrome silently stops synthesis roughly 15 seconds into a single utterance.
 // Nudging it with pause()/resume() on a timer keeps long sentences audible.
 // Harmless on Safari/Electron, which don't have the bug.
